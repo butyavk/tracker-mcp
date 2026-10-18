@@ -121,6 +121,7 @@ class Tracker:
         self.today = today
         st = config.statuses
         self.closed = set(st.closed)
+        self.waiting = set(st.waiting or [st.applied])
         self.aliases = {k.casefold(): v for k, v in st.aliases.items()}
 
     # ---- values
@@ -218,6 +219,12 @@ class Tracker:
         recs = [self._record(ws, lay, r) for r in lay.rows()
                 if ws.cell(r, lay.cols["company"]).value not in (None, "")]
         return recs, version
+
+    @staticmethod
+    def _label(ws: Worksheet, lay: Layout, r: int) -> str:
+        company = str(ws.cell(r, lay.cols["company"]).value or "").strip()
+        role = str(ws.cell(r, lay.cols["role"]).value or "").strip()
+        return f"{company} — {role}" if role else company
 
     @staticmethod
     def _brief(rec: dict[str, Any]) -> dict[str, Any]:
@@ -338,6 +345,57 @@ class Tracker:
                 "companies": [f"{r['company']} — {r['role']}" for r in cohort],
             }
         return out
+
+    def _stale_rows(self, ws: Worksheet, lay: Layout, days: int) -> list[dict[str, Any]]:
+        """Still waiting, submitted at least `days` ago, and no follow-up planned ahead."""
+        self._need("applied_on")
+        today = self.today()
+        out = []
+        for r in lay.rows():
+            if ws.cell(r, lay.cols["company"]).value in (None, ""):
+                continue
+            rec = self._record(ws, lay, r)
+            applied = parse_date(rec.get("applied_on"))
+            fu = parse_date(rec.get("followup_on"))
+            if (rec["status"] in self.waiting and self._is_applied(rec) and applied
+                    and (today - applied).days >= days and not (fu and fu >= today)):
+                log = rec.get("followup_log") or ""
+                out.append({**self._brief(rec), "days_since_applied": (today - applied).days,
+                            "last_log": log[-200:] if log else None})
+        return out
+
+    def stale_applications(self, days: int = 30) -> dict[str, Any]:
+        _, ws, lay, version = self._load()
+        rows = self._stale_rows(ws, lay, days)
+        return {"days": days, "count": len(rows), "applications": rows,
+                "would_set_status": self.cfg.statuses.no_response, "version": version}
+
+    def close_stale(self, days: int = 30, *, rows: list[int] | None = None,
+                    expected_version: str | None = None, dry_run: bool = False) -> dict[str, Any]:
+        """Set the no-response status on every stale row (or the listed subset) in one write."""
+        cfg = self.cfg
+
+        def mutate(wb: Workbook, ws: Worksheet, lay: Layout):
+            stale = [x["row"] for x in self._stale_rows(ws, lay, days)]
+            if rows is not None:
+                extra = sorted(set(rows) - set(stale))
+                if extra:
+                    raise TrackerError(f"Rows {extra} are not stale by the rule (waiting status, submitted "
+                                       f"{days}+ days ago, no follow-up planned ahead).")
+                stale = [r for r in stale if r in set(rows)]
+            if not stale:
+                return [], [], []
+            status = self._normalize_status(ws, lay, cfg.statuses.no_response)
+            text = cfg.messages.stale_closed.format(days=days)
+            changes: list[Change] = []
+            for r in stale:
+                self._set(ws, lay, r, "status", status, changes)
+                if cfg.has("followup_on"):
+                    self._set(ws, lay, r, "followup_on", cfg.values.no_date, changes)
+                self._log(ws, lay, r, text, changes)
+            return stale, changes, []
+
+        return self._write("close_stale", mutate, expected_version, dry_run)
 
     def recent_writes(self, limit: int = 10) -> dict[str, Any]:
         entries = self._audit_entries()
@@ -465,7 +523,7 @@ class Tracker:
 
         return self._write("log_followup", mutate, expected_version, dry_run)
 
-    def undo_last_write(self, expected_version: str | None = None) -> dict[str, Any]:
+    def undo_last_write(self, expected_version: str | None = None, dry_run: bool = False) -> dict[str, Any]:
         """Restore the backup of the last write, only if nothing changed since."""
         entries = self._audit_entries()
         entry = next((e for e in reversed(entries) if e["tool"] != "undo_last_write"), None)
@@ -473,11 +531,13 @@ class Tracker:
             raise TrackerError("No writes to undo")
         if entries[-1]["tool"] == "undo_last_write" and entries[-1].get("undid") == entry["at"]:
             raise TrackerError("The last write is already undone")
-        self._refuse_if_open()
         current = self.version()
         if current != entry["version_after"] or (expected_version and expected_version != current):
             raise ConflictError("The file changed after that write; undo would lose those changes. "
                                 f"Restore by hand from {entry['backup']} if needed.")
+        if dry_run:
+            return {"dry_run": True, "would_undo": entry, "version": current}
+        self._refuse_if_open()
         backup = self.backup_dir / entry["backup"]
         safety = self._backup()
         tmp = self.path.with_name(f".{self.path.stem}.tracker-mcp-tmp.xlsx")
@@ -501,7 +561,8 @@ class Tracker:
                                 f"you had {expected_version}). Re-read and retry.")
         row, changes, layout_notes = mutate(wb, ws, lay)
         result: dict[str, Any] = {"row": row, "dry_run": dry_run,
-                                  "changes": [c.as_dict(self._show) for c in changes]}
+                                  "changes": [c.as_dict(self._show) for c in changes],
+                                  "labels": {r: self._label(ws, lay, r) for r in sorted({c.row for c in changes})}}
         if layout_notes:
             result["layout"] = layout_notes
         if dry_run or not changes:

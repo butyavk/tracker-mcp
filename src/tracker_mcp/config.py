@@ -32,6 +32,9 @@ class Statuses(_Strict):
     not_applied: str = "Not applied"
     applied: str = "Applied"
     closed: list[str] = ["Rejected", "Withdrawn", "No response", "Offer", "Closed"]
+    # Still waiting for the company: close_stale only touches these.
+    waiting: list[str] | None = None   # default: [applied]
+    no_response: str = "No response"   # what close_stale sets
     # Used only when the status column has no dropdown in the workbook.
     fallback: list[str] = ["Not applied", "Applied", "Screening", "Interview", "Offer",
                            "Rejected", "Withdrawn", "No response", "Closed"]
@@ -58,6 +61,13 @@ class Messages(_Strict):
     applied: str = "applied"
     applied_with_followup: str = "applied, follow-up 1 on {date}"
     followup_cancelled: str = "follow-up {date} cancelled: {status}"
+    stale_closed: str = "closed: no reply for {days} days"
+
+
+class Safety(_Strict):
+    # Every write needs the user's yes: through the client's confirmation dialog
+    # (MCP elicitation) when it has one, otherwise through the token from a dry run.
+    confirm_writes: bool = True
 
 
 class Config(_Strict):
@@ -72,6 +82,7 @@ class Config(_Strict):
     values: Values = Values()
     followups: Followups = Followups()
     messages: Messages = Messages()
+    safety: Safety = Safety()
 
     @field_validator("columns")
     @classmethod

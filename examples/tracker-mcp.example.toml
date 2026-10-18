@@ -38,6 +38,8 @@ applied = "Applied"
 closed = ["Rejected", "Withdrawn", "No response", "Offer", "Closed"]   # no follow-ups for these
 fallback = ["Not applied", "Applied", "Screening", "Interview", "Offer", "Rejected", "Withdrawn", "No response", "Closed"]
 aliases = { "ghosted" = "No response" }   # other spellings -> the dropdown value
+waiting = ["Applied"]           # still waiting for the company; close_stale only touches these
+no_response = "No response"     # the status close_stale sets
 
 [values]
 yes = "Yes"
@@ -55,3 +57,9 @@ weekend_to_monday = true
 applied = "applied"
 applied_with_followup = "applied, follow-up 1 on {date}"
 followup_cancelled = "follow-up {date} cancelled: {status}"
+stale_closed = "closed: no reply for {days} days"
+
+[safety]
+# Every write needs the user's yes: the client's confirmation dialog (MCP elicitation)
+# when it has one, otherwise the confirm token from a dry run the user saw.
+confirm_writes = true

@@ -21,16 +21,18 @@ all come from a small TOML file next to the workbook (see [Config](#config)).
 | `list_applications` | read | Filter by status, company/role text, submit dates |
 | `get_application` | read | Every column of one application (by text or row) |
 | `followups_due` | read | Follow-ups due within N days, overdue first; submitted rows with no follow-up date |
+| `stale_applications` | read | Still waiting, submitted N+ days ago, no follow-up planned ahead |
 | `summary` | read | Counts by status and month; a cohort for a date range |
 | `recent_writes` | read | Audit log of this server's writes |
 | `add_application` | write | New row with the not-applied status; other columns via `extra`; refuses duplicates |
 | `mark_applied` | write | Submitted: date, channel, status, follow-up date by the configured rule |
 | `set_status` | write | New status from the file's dropdown; a closed status cancels the pending follow-up |
 | `log_followup` | write | Log a sent follow-up, schedule the next one or close |
+| `close_stale` | write | Close all stale applications (or chosen rows) in one write, one backup, one undo step |
 | `undo_last_write` | write | Restore the backup of the last write if nothing changed since |
 
 Read tools are annotated `readOnlyHint`; writes carry `destructiveHint` where they
-overwrite cells. All write tools take `dry_run` and `expected_version`.
+overwrite cells. All write tools take `dry_run`, `expected_version` and `confirm`.
 
 ## How a write stays safe
 
@@ -39,9 +41,21 @@ overwrite cells. All write tools take `dry_run` and `expected_version`.
 2. **Optimistic concurrency.** Each read returns `version`: a hash of the file's bytes.
    A write with `expected_version` is refused if the file changed since. It works
    like HTTP `If-Match`.
-3. **Dry run.** `dry_run=true` returns the exact cell changes (field, old → new)
-   and writes nothing. The server instructions ask the model to show those changes
-   and wait for a yes before writing.
+3. **The user confirms, and the server enforces it.** A "please ask first" line in
+   the instructions only works if the model follows it, so the yes is checked on the
+   server. Before the tool body runs, a resolver computes the plan, the exact cell
+   changes (field, old → new) at the current file version:
+   - If the client can show a dialog (MCP elicitation), the server asks the user
+     there, with the plan as the message. Older protocol versions get a request in
+     the middle of the call; 2026-07-28+ gets an input-required round. A decline
+     writes nothing.
+   - If the client has no dialog, the write needs `confirm`: the token from a dry
+     run of the same call. The token fingerprints the changes and the version, so a
+     token from another preview, or from before the file changed, does not match.
+
+   Either way the body writes with the plan's version as If-Match, so what lands in
+   the file is exactly what was approved, or nothing. `[safety] confirm_writes =
+   false` turns this off.
 4. **Write, verify, swap.** Save to a temp file, re-open it and check every intended
    cell. Check the version once more, back up the current file, then `os.replace`,
    which is atomic.
@@ -105,6 +119,8 @@ different sheet, header row and set of columns.
 - openpyxl drops cached formula values. The server sets `fullCalcOnLoad`, so Excel
   recalculates when the file is opened.
 - Undo goes back one step only.
+- Without a dialog, the token proves that a preview was made and nothing drifted
+  since. It cannot prove the model showed that preview to the user.
 
 ## Run
 

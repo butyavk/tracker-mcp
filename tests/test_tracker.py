@@ -166,3 +166,30 @@ def test_undo_only_when_nothing_changed_since(t):
 def test_bad_row(t):
     with pytest.raises(TrackerError, match="not an application row"):
         t.set_status(5, "Отказ")
+
+
+def test_close_stale_in_one_batch(tmp_path):
+    path = make_tracker(tmp_path / "tracker.xlsx")
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Подачи"]
+    ws["L7"], ws["Q7"] = datetime(2026, 9, 1), datetime(2026, 9, 11)   # Globex: silent since September
+    ws["L9"], ws["O9"], ws["K9"] = "2026-09-02", "Ждём ответа", "Да"     # Umbrella: waiting, no date
+    ws["Q10"] = datetime(2026, 10, 25)                                  # Hooli: follow-up still ahead
+    wb.save(path)
+    t = Tracker(path, config=load_config(path, RU_CONFIG), today=lambda: TODAY)
+
+    stale = t.stale_applications(30)
+    assert [a["company"] for a in stale["applications"]] == ["Globex", "Umbrella"]
+    assert stale["would_set_status"] == "Ответа нет"
+
+    with pytest.raises(TrackerError, match="not stale"):
+        t.close_stale(30, rows=[8], dry_run=True)
+    before = t.version()
+    res = t.close_stale(30)
+    assert res["row"] == [7, 9] and set(res["labels"]) == {7, 9}
+    got = {r: t.get_application(row=r)["applications"][0] for r in (7, 9)}
+    assert all(g["status"] == "Ответа нет" and g["followup_on"] == "—" for g in got.values())
+    assert got[7]["followup_log"].endswith("18.10: закрыто: 30 дн. без ответа")
+    assert len(list(t.backup_dir.glob("*.xlsx"))) == 1          # one backup for the batch
+    t.undo_last_write()
+    assert t.version() == before                                # one undo for the batch
