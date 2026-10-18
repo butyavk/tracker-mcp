@@ -23,6 +23,7 @@ import json
 import os
 import re
 import shutil
+import warnings
 from collections import Counter
 from collections.abc import Callable
 from copy import copy
@@ -144,6 +145,7 @@ class Tracker:
         self.backup_dir = (Path(backup_dir).expanduser() if backup_dir
                            else self.path.parent / "backups-tracker-mcp")
         self.today = today
+        self.lossy: list[str] = []   # set by each load, see _load
         st = config.statuses
         self.closed = set(st.closed)
         self.waiting = set(st.waiting or [st.applied])
@@ -186,11 +188,30 @@ class Tracker:
 
     def _is_applied(self, rec: dict[str, Any]) -> bool:
         if self.cfg.has("applied"):
-            return rec.get("applied") == self.cfg.values.yes
+            v = rec.get("applied")
+            if isinstance(v, bool):  # a checkbox column
+                return v
+            return v is not None and str(v).strip().casefold() == self.cfg.values.yes.casefold()
         return rec.get("status") not in (None, self.cfg.statuses.not_applied)
+
+    def _flag(self, ws: Worksheet, lay: Layout, yes: bool) -> bool | str:
+        """The value for the applied column: a bool if the column holds checkboxes."""
+        col = lay.cols["applied"]
+        if any(isinstance(ws.cell(r, col).value, bool) for r in lay.rows()):
+            return yes
+        return self.cfg.values.yes if yes else self.cfg.values.no
 
     def _stage(self, value: Any) -> int | None:
         return self.stage_of.get(str(value).strip().casefold()) if value not in (None, "") else None
+
+    def _stage_word(self, ws: Worksheet, lay: Layout, stage: int) -> str:
+        """What to write into the reached column: its own dropdown word for the stage
+        if it has one, else the stage's first status."""
+        for option in dropdown_values(ws, lay.cols["reached"]) or []:
+            if self._stage(option) == stage:
+                return option
+        name = self.stage_names[stage]
+        return (self.cfg.statuses.stages[name] or [name])[0]
 
     def _need(self, *fields: str) -> None:
         missing = [f for f in fields if not self.cfg.has(f)]
@@ -231,7 +252,12 @@ class Tracker:
         if not self.path.exists():
             raise TrackerError(f"Tracker file not found: {self.path}")
         data = self.path.read_bytes()
-        wb = openpyxl.load_workbook(BytesIO(data))
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            wb = openpyxl.load_workbook(BytesIO(data))
+        # Parts of the file openpyxl cannot keep (e.g. dropdowns that newer Excel stores
+        # in an extension): a save would silently drop them, so writes are refused.
+        self.lossy = sorted({str(w.message) for w in caught if "will be removed" in str(w.message)})
         if self.cfg.sheet not in wb.sheetnames:
             raise TrackerError(f"Sheet «{self.cfg.sheet}» not found")
         ws = wb[self.cfg.sheet]
@@ -285,6 +311,7 @@ class Tracker:
             "funnel_stages": st.stages,
             "followups": {"first_after_days": fu.first_after_days, "next_after_days": fu.next_after_days,
                           "weekend_to_monday": fu.weekend_to_monday},
+            **({"writes_blocked": self.lossy} if self.lossy else {}),
             "version": version,
         }
 
@@ -407,9 +434,11 @@ class Tracker:
         head = re.split(r"\s*[(\[,;]|\s+[—–/→|-]\s+", text, maxsplit=1)[0].strip()
         return (head or text)[:40]
 
-    def funnel(self, by: str = "channel", since: date | None = None, until: date | None = None,
+    def funnel(self, by: str | None = None, since: date | None = None, until: date | None = None,
                max_groups: int = 12) -> dict[str, Any]:
         """Applied -> replied -> each configured stage, in total and per group."""
+        if by is None:  # the channel if the tracker has one, else the month
+            by = "channel" if self.cfg.has("channel") else "month" if self.cfg.has("applied_on") else "status"
         if by != "month" and not self.cfg.has(by):
             options = ["month", *[f for f in self.cfg.columns if f not in ("company", "role", "num")]]
             raise TrackerError(f"Cannot group by «{by}»: not a column in the config. Options: {', '.join(options)}")
@@ -554,7 +583,9 @@ class Tracker:
                 nums = [int(v) for x in lay.rows()
                         if str(v := ws.cell(x, lay.cols["num"]).value or "").strip().isdigit()]
                 values = {"num": max(nums, default=0) + 1, **values}
-            values.update({"applied": cfg.values.no, "status": cfg.statuses.not_applied})
+            values["status"] = cfg.statuses.not_applied
+            if cfg.has("applied"):
+                values["applied"] = self._flag(ws, lay, False)
             changes: list[Change] = []
             for key, val in values.items():
                 if val not in (None, "") and cfg.has(key):
@@ -579,7 +610,7 @@ class Tracker:
             day = applied_on or self.today()
             changes: list[Change] = []
             if cfg.has("applied"):
-                self._set(ws, lay, row, "applied", cfg.values.yes, changes)
+                self._set(ws, lay, row, "applied", self._flag(ws, lay, True), changes)
             if cfg.has("applied_on"):
                 self._set(ws, lay, row, "applied_on", day, changes)
             if channel and cfg.has("channel"):
@@ -615,10 +646,11 @@ class Tracker:
             changes: list[Change] = []
             self._set(ws, lay, row, "status", st, changes)
             if cfg.has("reached"):  # the furthest stage only moves forward
-                new, old = self._stage(st), self._stage(ws.cell(row, lay.cols["reached"]).value)
-                if new is not None and (old is None or new > old):
-                    name = self.stage_names[new]  # write the stage's first status, e.g. "Interview"
-                    self._set(ws, lay, row, "reached", (cfg.statuses.stages[name] or [name])[0], changes)
+                cell = ws.cell(row, lay.cols["reached"]).value
+                new, old = self._stage(st), self._stage(cell)
+                known = old is not None or cell in (None, "")   # never overwrite a word we cannot read
+                if new is not None and known and (old is None or new > old):
+                    self._set(ws, lay, row, "reached", self._stage_word(ws, lay, new), changes)
             for key, text in (("response", response), ("notes", note)):
                 if text and cfg.has(key):
                     self._set(ws, lay, row, key,
@@ -685,6 +717,11 @@ class Tracker:
         if not dry_run:
             self._refuse_if_open()
         wb, ws, lay, before = self._load()
+        if self.lossy and not dry_run:
+            raise TrackerError("Writes are off for this workbook: openpyxl, which the server writes with, "
+                               "cannot keep some of its Excel features and would drop them on save: "
+                               f"{'; '.join(self.lossy)}. A common cause is a dropdown that takes its list "
+                               "from another sheet, saved by newer Excel. Reading works as usual.")
         if expected_version and expected_version != before:
             raise ConflictError(f"The tracker changed since you read it (now {before}, "
                                 f"you had {expected_version}). Re-read and retry.")
@@ -694,6 +731,8 @@ class Tracker:
                                   "labels": {r: self._label(ws, lay, r) for r in sorted({c.row for c in changes})}}
         if layout_notes:
             result["layout"] = layout_notes
+        if self.lossy:
+            result["warning"] = f"This workbook cannot be written: {'; '.join(self.lossy)}"
         if dry_run or not changes:
             result["version"] = before
             if not changes:

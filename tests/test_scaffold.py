@@ -140,3 +140,130 @@ def test_cli(tmp_path):
     assert "header_row = 5" in run("init", str(book), "--print").stdout
     created = run("new", str(tmp_path / "fresh.xlsx"))
     assert created.returncode == 0 and (tmp_path / "fresh.tracker-mcp.toml").exists()
+
+
+def _book(path, headers, rows=(), dropdowns=None, sheet="Jobs"):
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = sheet
+    ws.append(headers)
+    for r in rows:
+        ws.append(list(r))
+    for header, options in (dropdowns or {}).items():
+        col = openpyxl.utils.get_column_letter(headers.index(header) + 1)
+        dv = DataValidation(type="list", formula1='"' + ",".join(options) + '"')
+        dv.add(f"{col}2:{col}100")
+        ws.add_data_validation(dv)
+    wb.save(path)
+    return path
+
+
+@pytest.mark.parametrize("word, kind", [
+    ("Not interested", "withdrawn"), ("Interested", "not_applied"), ("Interview planned", "interview"),
+    ("Offer Declined", "offer"), ("Declined offer", "offer"), ("Hired", "offer"),
+    ("Waiting for offer", "final"), ("Phone Screen", "screening"), ("Onsite", "interview"),
+    ("Coding challenge", "interview"), ("Ghosted", "no_response"), ("Not Selected", "rejected"),
+    ("Application submitted", "applied"), ("Under review", "waiting"), ("Отказался", "withdrawn"),
+    ("Отказ", "rejected"), ("Ждём ответа", "waiting"),
+])
+def test_status_words(word, kind):
+    from tracker_mcp.scaffold import _classify
+    meaning, unknown = _classify([word])
+    assert meaning[kind] == [word] and not unknown
+
+
+def test_rejected_after_a_stage_counts_for_that_stage():
+    from tracker_mcp.scaffold import _classify
+    meaning, _ = _classify(["Rejected after interview"])
+    assert meaning["rejected"] == meaning["interview"] == ["Rejected after interview"]
+
+
+def test_common_english_headers(tmp_path):
+    headers = ["Job ID", "Company", "Job Title", "Source (LinkedIn/Indeed)", "Date Applied", "Status",
+               "Response Date", "Contact", "Link", "Salary Range", "Notes", "Follow up"]
+    g = guess(_book(tmp_path / "a.xlsx", headers, [["1", "Acme", "EM", "", "2026-10-01", "Applied"]]))
+    got = {k: h for k, (_, h) in g.columns.items()}
+    assert got["role"] == "Job Title" and got["link"] == "Link"
+    assert got["source"] == "Source (LinkedIn/Indeed)" and got["applied_on"] == "Date Applied"
+    assert got["followup_contact"] == "Contact" and got["followup_on"] == "Follow up"
+    assert "response" not in got           # a date column must not take response text
+
+
+def test_checkbox_applied_column(tmp_path):
+    book = _book(tmp_path / "c.xlsx", ["Company", "Role", "Status", "Applied?"],
+                 [["Acme", "EM", "Applied", True], ["Globex", "EM", "Draft", False]])
+    _, g, _ = init(book)
+    assert g.yes_no == ("TRUE", "FALSE")
+    t = Tracker(book, config=load_config(book), today=lambda: TODAY)
+    assert t.summary()["applied"] == 1
+    with pytest.raises(TrackerError, match="already marked"):
+        t.mark_applied(2)
+    res = t.mark_applied(3)
+    assert {c["field"]: c["new"] for c in res["changes"]}["applied"] is True
+    t.add_application("Initech", "VP")
+    assert openpyxl.load_workbook(book)["Jobs"]["D4"].value is False
+
+
+def test_status_column_without_dropdown_or_values(tmp_path):
+    book = _book(tmp_path / "e.xlsx", ["Company", "Role", "Status"], [["Acme", "EM", None]])
+    _, g, text = init(book)
+    assert "fallback =" not in text and any("default English statuses" in c for c in g.checks)
+    t = Tracker(book, config=load_config(book), today=lambda: TODAY)
+    assert t.set_status(2, "Interview", dry_run=True)["changes"]
+
+
+def test_a_status_with_a_line_break(tmp_path):
+    book = _book(tmp_path / "n.xlsx", ["Company", "Role", "Status"],
+                 [["Acme", "EM", "On hold\nuntil January"], ["Globex", "EM", "Applied"]])
+    _, g, text = init(book)
+    assert tomllib.loads(text) and any("On hold until January" in c for c in g.checks)
+
+
+def test_reached_column_with_its_own_words(tmp_path):
+    book = _book(tmp_path / "r.xlsx", ["Company", "Role", "Status", "Furthest stage", "Applied on"],
+                 [["Acme", "EM", "Applied", None, "2026-10-01"], ["Globex", "EM", "Applied", None, "2026-10-01"]],
+                 {"Status": ["To apply", "Applied", "Recruiter call", "Technical", "Offer", "Rejected", "Ghosted"],
+                  "Furthest stage": ["Phone screen", "Final round", "Offer"]})
+    init(book)
+    cfg = load_config(book)
+    assert "Final round" in cfg.statuses.stages["interview"] and "Phone screen" in cfg.statuses.stages["screening"]
+    t = Tracker(book, config=cfg, today=lambda: TODAY)
+    t.set_status(2, "Technical")
+    assert t.get_application(row=2)["applications"][0]["reached"] == "Final round"   # the column's own word
+    t.set_status(2, "Recruiter call")                                                  # never moves back
+    assert t.get_application(row=2)["applications"][0]["reached"] == "Final round"
+    ws = openpyxl.load_workbook(book)["Jobs"]
+    ws["D3"] = "Coffee chat"
+    ws.parent.save(book)
+    res = t.set_status(3, "Technical")                    # an unknown word in reached is left alone
+    assert [c["field"] for c in res["changes"]] == ["status"]
+    assert t.funnel()["by"] == "month" and t.funnel()["total"]["interview"] == 2
+
+
+def test_writes_refused_when_a_save_would_drop_parts_of_the_file(tmp_path, monkeypatch):
+    import warnings
+
+    import tracker_mcp.tracker as tr
+    real = tr.openpyxl.load_workbook
+
+    def load(*a, **kw):
+        warnings.warn("Data Validation extension is not supported and will be removed", UserWarning, stacklevel=2)
+        return real(*a, **kw)
+
+    t = ru_tracker(tmp_path / "t.xlsx")
+    monkeypatch.setattr(tr.openpyxl, "load_workbook", load)
+    assert t.describe()["writes_blocked"]
+    assert "cannot be written" in t.set_status(7, "Отказ", dry_run=True)["warning"]
+    with pytest.raises(TrackerError, match="Writes are off"):
+        t.set_status(7, "Отказ")
+
+
+def test_cli_errors_are_messages_not_tracebacks(tmp_path):
+    book = make_tracker(tmp_path / "t.xlsx")
+    run = lambda *a: subprocess.run([sys.executable, "-m", "tracker_mcp.server", *a],  # noqa: E731
+                                    capture_output=True, text=True)
+    for args, msg in ((("init", str(book), "--sheet", "Nope"), "No sheet"),
+                      (("new", str(tmp_path / "missing" / "x.xlsx")), "No such folder"),
+                      (("init", str(tmp_path / "none.xlsx")), "No such workbook")):
+        out = run(*args)
+        assert out.returncode == 2 and msg in out.stderr and "Traceback" not in out.stderr

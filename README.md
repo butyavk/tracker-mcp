@@ -147,6 +147,12 @@ different sheet, header row and set of columns.
   write. That's fine for one person; a shared tracker would need row-level versions.
 - A small window remains between the last version check and the rename. An xlsx
   file has no real locking.
+- openpyxl cannot keep some parts of newer Excel files, such as dropdowns that take
+  their list from another sheet and are stored in an extension. If loading the file
+  warns that a part "will be removed", the server refuses writes to that workbook
+  rather than drop it on save, and says so in `describe_tracker`. Reading works.
+- `init` understands English and Russian headers and status words. In other
+  languages it maps less and lists the rest under "check by hand".
 - openpyxl drops cached formula values. The server sets `fullCalcOnLoad`, so Excel
   recalculates when the file is opened.
 - Undo goes back one step only.

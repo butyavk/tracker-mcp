@@ -246,8 +246,9 @@ def summary(
 
 @mcp.tool(annotations=READ)
 def funnel(
-    by: Annotated[str, Field(description="Group by: 'channel', 'source', 'month', or another field "
-                                         "from describe_tracker")] = "channel",
+    by: Annotated[str | None, Field(description="Group by: 'channel', 'source', 'month', or another field "
+                                                "from describe_tracker. Default: channel if the tracker "
+                                                "has one, else month")] = None,
     since: Annotated[date | None, Field(description="Only applications submitted on/after")] = None,
     until: Annotated[date | None, Field(description="Only applications submitted on/before")] = None,
 ) -> dict[str, Any]:

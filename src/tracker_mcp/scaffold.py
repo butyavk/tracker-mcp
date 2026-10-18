@@ -17,6 +17,7 @@ import argparse
 import json
 import re
 import sys
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,30 +46,35 @@ FIELD_PATTERNS: list[tuple[str, str]] = [
                    r"|(appl|submit|sent|подан|отклик).*(date|\bon\b|when|дата)"),
     ("applied", r"^(applied|submitted|sent|подался|подалась|подано|откликнулся|отправлено)\s*\??$"),
     ("company", r"company|employer|organi[sz]ation|компани|работодател|фирма|организац"),
-    ("role", r"^(role|position|job|title|job title|vacancy|opening)\b|роль|должност|позици|ваканси"),
+    ("role", r"^(job )?(title|role|position)\b|^job$|^(vacancy|opening)\b|роль|должност|позици|ваканси"),
     ("status", r"status|^stage$|^state$|статус|^этап$|^стадия$"),
-    ("link", r"link|url|posting|ссылк"),
+    ("link", r"\blink\b|\burl\b|posting|ссылк"),          # not "LinkedIn"
     ("channel", r"channel|applied (via|through)|^via$|канал|как подал"),
     ("source", r"source|found (on|via|at)|where found|источник|где наш[её]л|откуда"),
-    ("response", r"^(response|reply|replies|answer|feedback)\b|^ответ"),
+    ("response", r"^(response|reply|replies|answer|feedback)\b(?!.*(date|when))|^ответ(?!.*дат)"),
     ("notes", r"^notes?\b|comment|заметк|комментар|примечан"),
 ]
 
-# What a status word means. Checked in this order; the first match wins.
+# What a status word means. Checked in this order; the first match wins. "final"
+# is a status after the last interview ("Waiting for offer"): an interview stage,
+# not a waiting status, so close_stale never touches it.
 STATUS_PATTERNS: list[tuple[str, str]] = [
-    ("not_applied", r"not (yet )?applied|to apply|wish ?list|saved|bookmark|draft|interested|planned"
-                    r"|не подав|не подан|хочу|план"),
-    ("withdrawn", r"withdr|отозвал|отказался|отказалась"),
+    ("withdrawn", r"withdr|not interested|no longer interested|lost interest|отозвал|отказался|отказалась"
+                  r"|не интересн"),
+    ("not_applied", r"^(not (yet )?applied|to apply|wish ?list|saved|bookmarked?|draft|interested|planned"
+                    r"|planning to apply|researching|backlog)$|не подав|не подан|^хочу|^план"),
     ("no_response", r"no (response|reply|answer)|ghost|нет ответа|ответа нет|без ответа|молч"),
-    ("rejected", r"reject|declin|turned down|not selected|отказ"),
-    ("offer", r"offer|оффер"),
-    ("waiting", r"wait|pending|awaiting|ждём|ждем|ожида"),
-    ("applied", r"^(applied|submitted|sent|application sent)$|^подан[аоы]?$|^отправлен|^откликнул"),
+    ("final", r"(wait|await|pending).*(offer|decision)|(offer|decision) pending|жд[её]м (оффер|решени)"),
+    ("offer", r"offer|hired|accepted|оффер|принят"),        # "Offer declined" got an offer too
+    ("rejected", r"reject|declin|turned down|not selected|unsuccessful|отказ"),
+    ("waiting", r"wait|pending|awaiting|under review|in review|жд[её]м|ожида|на рассмотрени"),
+    ("applied", r"^(applied|submitted|sent|application (sent|submitted))$|^подан[аоы]?$|^отправлен|^откликнул"),
     ("closed", r"closed|filled|cancel|archiv|закрыт|отмен"),
     ("screening", r"screen|recruiter|\bhr\b|phone|intro|скрининг|созвон|hr-"),
-    ("interview", r"interview|tech|onsite|on-site|final|panel|case|assignment|take.?home|test"
-                  r"|интервью|тех|финал|задани|собес"),
+    ("interview", r"interview|tech|onsite|on-site|final|panel|case|assignment|take.?home|test|assessment"
+                  r"|challenge|интервью|тех|финал|задани|собес"),
 ]
+STAGE_KINDS = {"screening": ["screening"], "interview": ["interview", "final"], "offer": ["offer"]}
 
 YES = r"^(yes|y|да|true|1|✓|✔|x)$"
 
@@ -93,6 +99,7 @@ class Guess:
     statuses_from: str                           # "dropdown", "data" or "none"
     meaning: dict[str, list[str]]                # not_applied, applied, waiting, ... -> statuses
     yes_no: tuple[str, str] | None
+    reached_words: dict[str, list[str]]          # stage -> words of the reached column's own dropdown
     summary_sheet: str | None
     lang: str
     checks: list[str] = field(default_factory=list)
@@ -121,6 +128,8 @@ def _headers(ws: Worksheet, row: int) -> dict[int, str]:
 
 
 def _find_header(wb, sheet: str | None) -> tuple[Worksheet, int, dict[str, tuple[int, str]]]:
+    if sheet and sheet not in wb.sheetnames:
+        raise TrackerError(f"No sheet «{sheet}». Sheets: {', '.join(wb.sheetnames)}")
     best = None
     for ws in [wb[sheet]] if sheet else wb.worksheets:
         for r in range(1, min(ws.max_row, 30) + 1):
@@ -137,16 +146,27 @@ def _find_header(wb, sheet: str | None) -> tuple[Worksheet, int, dict[str, tuple
     return best
 
 
+def _kind(status: str, kinds: list[tuple[str, str]] = STATUS_PATTERNS) -> str | None:
+    return next((name for name, p in kinds if re.search(p, _norm(status))), None)
+
+
 def _classify(statuses: list[str]) -> tuple[dict[str, list[str]], list[str]]:
     meaning: dict[str, list[str]] = {name: [] for name, _ in STATUS_PATTERNS}
+    stages_only = [(k, p) for k, p in STATUS_PATTERNS if k in ("screening", "interview")]
     unknown = []
     for s in statuses:
-        kind = next((name for name, p in STATUS_PATTERNS if re.search(p, _norm(s))), None)
-        if kind:
-            meaning[kind].append(s)
-        else:
+        kind = _kind(s)
+        if kind is None:
             unknown.append(s)
+            continue
+        meaning[kind].append(s)
+        if kind == "rejected" and (stage := _kind(s, stages_only)):  # "Rejected after interview"
+            meaning[stage].append(s)
     return meaning, unknown
+
+
+def _one_line(text: str) -> str:
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def guess(path: str | Path, sheet: str | None = None) -> Guess:
@@ -169,11 +189,13 @@ def guess(path: str | Path, sheet: str | None = None) -> Guess:
             fields["applied_on"] = fields.pop("applied")
     yes_no = None
     if "applied" in fields:
-        options = dropdown_values(ws, fields["applied"][0]) or list(dict.fromkeys(
-            str(v).strip() for v in values(fields["applied"][0])))
+        raw = values(fields["applied"][0])
+        options = dropdown_values(ws, fields["applied"][0]) or list(dict.fromkeys(str(v).strip() for v in raw))
         yes = [o for o in options if re.match(YES, _norm(o))]
         no = [o for o in options if o not in yes]
-        if len(yes) == 1 and len(no) == 1:
+        if any(isinstance(v, bool) for v in raw):   # checkboxes: the server reads and writes booleans
+            yes_no = ("TRUE", "FALSE")
+        elif len(yes) == 1 and len(no) == 1:
             yes_no = (yes[0], no[0])
         else:
             checks.append(f"values.yes / values.no: could not tell yes from no in "
@@ -188,6 +210,21 @@ def guess(path: str | Path, sheet: str | None = None) -> Guess:
         statuses = list(dict.fromkeys(str(v).strip() for v in values(status_col)))
         statuses_from = "data" if statuses else "none"
     meaning, unknown = _classify(statuses)
+    if statuses_from == "none":
+        checks.append("the status column has no dropdown and no values yet: the default English "
+                      "statuses apply (see `fallback` in the example config)")
+    reached_words: dict[str, list[str]] = {}
+    if "reached" in fields:   # its own words, e.g. "Final round", join the stages
+        col = fields["reached"][0]
+        words = dropdown_values(ws, col) or list(dict.fromkeys(str(v).strip() for v in values(col)))
+        for w in words:
+            kind = _kind(w)
+            stage = next((st for st, kinds in STAGE_KINDS.items() if kind in kinds), None)
+            if stage:
+                reached_words.setdefault(stage, []).append(w)
+            else:
+                checks.append(f"«{w}» in «{fields['reached'][1]}» is not a screening, interview or offer "
+                              "word; add it to a stage in [statuses.stages]")
     if unknown:
         checks.append(f"statuses not recognised: {', '.join(unknown)}. Add them to closed, waiting "
                       "or a funnel stage if they mean one.")
@@ -210,7 +247,8 @@ def guess(path: str | Path, sheet: str | None = None) -> Guess:
         columns=dict(sorted(fields.items(), key=lambda kv: kv[1][0])),
         unmapped=[(c, h) for c, h in headers.items() if c not in mapped],
         statuses=statuses, statuses_from=statuses_from, meaning=meaning,
-        yes_no=yes_no, summary_sheet=summary, lang=lang, checks=checks)
+        yes_no=yes_no, reached_words=reached_words, summary_sheet=summary, lang=lang,
+        checks=[_one_line(c) for c in checks])
 
 
 # ---------------------------------------------------------------- TOML
@@ -240,8 +278,11 @@ def render(g: Guess) -> str:
     closed = [s for s in g.statuses if s in {*m["withdrawn"], *m["no_response"], *m["rejected"],
                                              *m["offer"], *m["closed"]}]
     waiting = [applied, *m["waiting"]] if m["applied"] else m["waiting"] or [applied]
-    stages = {k: v for k, v in (("screening", m["screening"]), ("interview", m["interview"]),
-                                ("offer", m["offer"])) if v}
+    stages = {}
+    for stage, kinds in STAGE_KINDS.items():
+        words = [s for kind in kinds for s in m[kind]] + g.reached_words.get(stage, [])
+        if words:
+            stages[stage] = list(dict.fromkeys(words))
     check = " # CHECK" if g.checks else ""
     yes, no = g.yes_no or ("Yes", "No")
     lines = [
@@ -271,7 +312,7 @@ def render(g: Guess) -> str:
         f"rejected = {_list(rejected)}",
         f"closed = {_list(closed)}",
     ]
-    if g.statuses_from != "dropdown":
+    if g.statuses_from == "data":
         lines.append(f"fallback = {_list(g.statuses)}   # the status column has no dropdown")
     lines += ["", "[statuses.stages]               # funnel stages after a reply, in order"]
     lines += [f"{k} = {_list(v)}" for k, v in stages.items()]
@@ -315,17 +356,30 @@ def init(path: str | Path, *, out: str | Path | None = None, sheet: str | None =
     g = guess(path, sheet)
     text = render(g)
     target = Path(out).expanduser() if out else config_path(path)
-    if not write:
-        return None, g, text
-    if target.exists() and not force:
+    if write and target.exists() and not force:
         raise TrackerError(f"{target} already exists. Pass --force to overwrite it, "
                            "or --print to only see the guess.")
-    target.write_text(text, encoding="utf-8")
-    try:  # the guess must load and map the workbook, or it is no use
-        Tracker(path, config=load_config(path, target)).describe()
-    except (ConfigError, TrackerError) as e:
-        raise TrackerError(f"Wrote {target}, but it does not work yet: {e}") from e
-    return target, g, text
+    try:
+        check(path, text)
+    except TrackerError as e:
+        if write:
+            raise
+        text = f"# DOES NOT WORK YET: {_one_line(str(e))}\n{text}"
+    if write:
+        target.write_text(text, encoding="utf-8")
+    return (target if write else None), g, text
+
+
+def check(path: Path, text: str) -> None:
+    """The guess must load and map the workbook before it is written anywhere."""
+    with tempfile.TemporaryDirectory() as d:
+        tmp = Path(d) / "guess.tracker-mcp.toml"
+        tmp.write_text(text, encoding="utf-8")
+        try:
+            Tracker(path, config=load_config(path, tmp), backup_dir=d).describe()
+        except (ConfigError, TrackerError) as e:
+            raise TrackerError(f"The guessed config does not work: {e}. Nothing was written; "
+                               "see the guess with --print and fix it by hand.") from e
 
 
 # ---------------------------------------------------------------- new
@@ -343,6 +397,8 @@ def new_tracker(path: str | Path, *, force_config: bool = False) -> tuple[Path, 
     path = Path(path).expanduser()
     if path.suffix.lower() != ".xlsx":
         raise TrackerError("The tracker must be an .xlsx file")
+    if not path.parent.is_dir():
+        raise TrackerError(f"No such folder: {path.parent}")
     if path.exists():
         raise TrackerError(f"{path} already exists; `new` never overwrites a workbook. "
                            "For an existing tracker use `tracker-mcp init`.")
