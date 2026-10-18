@@ -143,3 +143,10 @@ def test_check_cli(en):
                          text=True, env={**os.environ, "TRACKER_PATH": str(en.path),
                                          "TRACKER_CONFIG": str(Path(en.path).with_suffix(".none"))})
     assert bad.returncode == 2 and "No config" in bad.stderr
+
+
+def test_example_config_is_valid():
+    example = Path(__file__).parent.parent / "examples" / "tracker-mcp.example.toml"
+    cfg = load_config("unused.xlsx", example)
+    assert cfg.date_columns == ["applied_on", "followup_on"] and "date_columns" not in cfg.columns
+    assert list(cfg.statuses.stages) == ["screening", "interview", "offer"]

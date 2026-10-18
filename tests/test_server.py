@@ -33,6 +33,10 @@ def test_tools_over_mcp(t):
             res = await c.call_tool("followups_due", {"within_days": 7})
             assert res.structured_content["due"][0]["company"] == "Globex"
 
+            res = await c.call_tool("funnel", {"by": "month"})
+            assert res.structured_content["total"]["applied"] == 4
+            assert tools["funnel"].annotations.read_only_hint is True
+
             res = await c.call_tool("set_status", {"row": 7, "status": "Ждём"})
             assert res.is_error and "Allowed" in res.content[0].text
 

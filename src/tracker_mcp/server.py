@@ -7,6 +7,8 @@ lives here is confirmation: no write happens without the user's yes (`guarded`).
 
     TRACKER_PATH=~/tracker.xlsx tracker-mcp           # serve over stdio
     TRACKER_PATH=~/tracker.xlsx tracker-mcp --check   # print how the config maps the file
+    tracker-mcp init ~/tracker.xlsx                   # write a config for an existing tracker
+    tracker-mcp new ~/tracker.xlsx                    # create an empty tracker and its config
 """
 
 from __future__ import annotations
@@ -243,6 +245,19 @@ def summary(
 
 
 @mcp.tool(annotations=READ)
+def funnel(
+    by: Annotated[str, Field(description="Group by: 'channel', 'source', 'month', or another field "
+                                         "from describe_tracker")] = "channel",
+    since: Annotated[date | None, Field(description="Only applications submitted on/after")] = None,
+    until: Annotated[date | None, Field(description="Only applications submitted on/before")] = None,
+) -> dict[str, Any]:
+    """Conversion of submitted applications: how many got any reply (a rejection counts),
+    and how many reached each funnel stage (screening, interview, offer, as configured).
+    In total and per group, with rates in percent of submitted."""
+    return call("funnel", by, since, until)
+
+
+@mcp.tool(annotations=READ)
 def recent_writes(limit: int = 10) -> dict[str, Any]:
     """The audit log of this server's writes, newest first."""
     return call("recent_writes", limit)
@@ -399,7 +414,13 @@ def undo_last_write(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="tracker-mcp")
+    if sys.argv[1:2] and sys.argv[1] in ("init", "new"):
+        from .scaffold import cli
+        sys.exit(cli(sys.argv[1:]))
+    parser = argparse.ArgumentParser(
+        prog="tracker-mcp",
+        epilog="Getting started: `tracker-mcp init <workbook.xlsx>` writes a config for your tracker; "
+               "`tracker-mcp new <workbook.xlsx>` creates an empty tracker with one.")
     parser.add_argument("--check", action="store_true",
                         help="print how the config maps the workbook, then exit")
     args = parser.parse_args()

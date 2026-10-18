@@ -79,6 +79,31 @@ def parse_date(value: Any) -> date | None:
     return None
 
 
+def dropdown_values(ws: Worksheet, col: int) -> list[str] | None:
+    """The list a column's dropdown offers: inline ("A,B,C"), a cell range
+    (Lists!$A$1:$A$9) or a defined name pointing to one. None if there is none."""
+    for dv in ws.data_validations.dataValidation:
+        if dv.type != "list" or not dv.formula1 or not any(
+                rng.min_col <= col <= rng.max_col for rng in dv.sqref.ranges):
+            continue
+        f = dv.formula1.strip().lstrip("=")
+        if f.startswith('"'):
+            return [s.strip() for s in f.strip('"').split(",") if s.strip()]
+        wb = ws.parent
+        if f in wb.defined_names:
+            f = wb.defined_names[f].attr_text
+        sheet_name, _, ref = f.rpartition("!")
+        try:
+            sheet = wb[sheet_name.strip("'")] if sheet_name else ws
+            cells = sheet[ref.replace("$", "")]
+        except (KeyError, ValueError):
+            return None
+        flat = [c for row in (cells if isinstance(cells, tuple) else ((cells,),)) for c in
+                (row if isinstance(row, tuple) else (row,))]
+        return [str(c.value).strip() for c in flat if c.value not in (None, "")] or None
+    return None
+
+
 def weekday_or_monday(d: date) -> date:
     return d + timedelta(days=(7 - d.weekday()) % 7) if d.weekday() >= 5 else d
 
@@ -122,7 +147,14 @@ class Tracker:
         st = config.statuses
         self.closed = set(st.closed)
         self.waiting = set(st.waiting or [st.applied])
+        self.rejected = set(st.rejected)
         self.aliases = {k.casefold(): v for k, v in st.aliases.items()}
+        # funnel stage of a status (or of a stage name, for the `reached` column)
+        self.stage_names = list(st.stages)
+        self.stage_of: dict[str, int] = {}
+        for i, (name, members) in enumerate(st.stages.items()):
+            for s in (name, *members):
+                self.stage_of[s.casefold()] = i
 
     # ---- values
 
@@ -156,6 +188,9 @@ class Tracker:
         if self.cfg.has("applied"):
             return rec.get("applied") == self.cfg.values.yes
         return rec.get("status") not in (None, self.cfg.statuses.not_applied)
+
+    def _stage(self, value: Any) -> int | None:
+        return self.stage_of.get(str(value).strip().casefold()) if value not in (None, "") else None
 
     def _need(self, *fields: str) -> None:
         missing = [f for f in fields if not self.cfg.has(f)]
@@ -246,6 +281,8 @@ class Tracker:
             "status_not_applied": st.not_applied,
             "status_applied": st.applied,
             "statuses_closed": st.closed,
+            "statuses_rejected": st.rejected,
+            "funnel_stages": st.stages,
             "followups": {"first_after_days": fu.first_after_days, "next_after_days": fu.next_after_days,
                           "weekend_to_monday": fu.weekend_to_monday},
             "version": version,
@@ -346,6 +383,92 @@ class Tracker:
             }
         return out
 
+    # ---- funnel
+
+    def _furthest(self, rec: dict[str, Any]) -> int:
+        """-1: no reply; 0: a reply (a rejection counts); 1..n: reached stage n."""
+        stages = [s for s in (self._stage(rec.get("status")), self._stage(rec.get("reached"))) if s is not None]
+        if stages:
+            return max(stages) + 1
+        return 0 if rec.get("status") in self.rejected else -1
+
+    def _group(self, rec: dict[str, Any], by: str) -> str:
+        if by == "month":
+            d = parse_date(rec.get("applied_on"))
+            return d.strftime("%Y-%m") if d else "(no date)"
+        text = str(rec.get(by) or "").strip()
+        if not text:
+            return "(empty)"
+        low = text.casefold()
+        for name, parts in self.cfg.funnel.groups.items():
+            if any(p.casefold() in low for p in parts):
+                return name
+        # free text such as "Ashby (direct form), filled in by hand" -> "Ashby"
+        head = re.split(r"\s*[(\[,;]|\s+[—–/→|-]\s+", text, maxsplit=1)[0].strip()
+        return (head or text)[:40]
+
+    def funnel(self, by: str = "channel", since: date | None = None, until: date | None = None,
+               max_groups: int = 12) -> dict[str, Any]:
+        """Applied -> replied -> each configured stage, in total and per group."""
+        if by != "month" and not self.cfg.has(by):
+            options = ["month", *[f for f in self.cfg.columns if f not in ("company", "role", "num")]]
+            raise TrackerError(f"Cannot group by «{by}»: not a column in the config. Options: {', '.join(options)}")
+        if by == "month" or since or until:
+            self._need("applied_on")
+        recs, version = self.records()
+        applied = [r for r in recs if self._is_applied(r)]
+        skipped = 0
+        if since or until:
+            kept = []
+            for r in applied:
+                d = parse_date(r.get("applied_on"))
+                if d and (not since or d >= since) and (not until or d <= until):
+                    kept.append(r)
+                elif d is None:
+                    skipped += 1
+            applied = kept
+        levels = ["replied", *self.stage_names]
+        no_response = self.cfg.statuses.no_response
+
+        def count(rs: list[dict[str, Any]]) -> dict[str, Any]:
+            reached = [self._furthest(r) for r in rs]
+            out: dict[str, Any] = {"applied": len(rs)}
+            for i, name in enumerate(levels):
+                out[name] = sum(1 for x in reached if x >= i)
+            out["waiting"] = sum(1 for r in rs if r["status"] in self.waiting)
+            out["no_response"] = sum(1 for r in rs if r["status"] == no_response)
+            out["rates"] = {name: round(100 * out[name] / len(rs), 1) if rs else None for name in levels}
+            return out
+
+        buckets: dict[str, list[dict[str, Any]]] = {}
+        names: dict[str, str] = {}
+        for r in applied:
+            key = self._group(r, by)
+            names.setdefault(key.casefold(), key)
+            buckets.setdefault(key.casefold(), []).append(r)
+        order = sorted(buckets, key=(lambda k: k) if by == "month" else (lambda k: (-len(buckets[k]), k)))
+        if by != "month" and len(order) > max_groups:
+            merged = order[max_groups - 1:]
+            buckets["(other)"] = [r for k in merged for r in buckets[k]]
+            names["(other)"] = f"(other: {len(merged)} groups)"
+            order = order[:max_groups - 1] + ["(other)"]
+        result: dict[str, Any] = {
+            "by": by,
+            "levels": ["applied", *levels],
+            "total": count(applied),
+            "groups": [{"group": names[k], **count(buckets[k])} for k in order],
+            "note": ("Stage = the later of the current status and the `reached` column."
+                     if self.cfg.has("reached") else
+                     "Stages come from the current status only, so an application rejected after "
+                     "an interview counts as a reply. A `reached` column keeps the furthest stage."),
+            "version": version,
+        }
+        if since or until:
+            result["period"] = {"since": since.isoformat() if since else None,
+                                "until": until.isoformat() if until else None,
+                                "applied_without_date": skipped}
+        return result
+
     def _stale_rows(self, ws: Worksheet, lay: Layout, days: int) -> list[dict[str, Any]]:
         """Still waiting, submitted at least `days` ago, and no follow-up planned ahead."""
         self._need("applied_on")
@@ -424,7 +547,8 @@ class Tracker:
                         raise TrackerError(f"Row {r} already has this application. "
                                            "Pass allow_duplicate=true to add anyway.")
             r = lay.last_row + 1
-            self._copy_row_style(ws, lay, src=lay.last_row, dst=r)
+            if lay.last_row > lay.header_row:  # an empty tracker has no data row to copy from
+                self._copy_row_style(ws, lay, src=lay.last_row, dst=r)
             values: dict[str, Any] = {"company": company, "role": role, "link": link, "notes": notes}
             if cfg.has("num"):
                 nums = [int(v) for x in lay.rows()
@@ -490,6 +614,11 @@ class Tracker:
                                    "the date and the follow-up date.")
             changes: list[Change] = []
             self._set(ws, lay, row, "status", st, changes)
+            if cfg.has("reached"):  # the furthest stage only moves forward
+                new, old = self._stage(st), self._stage(ws.cell(row, lay.cols["reached"]).value)
+                if new is not None and (old is None or new > old):
+                    name = self.stage_names[new]  # write the stage's first status, e.g. "Interview"
+                    self._set(ws, lay, row, "reached", (cfg.statuses.stages[name] or [name])[0], changes)
             for key, text in (("response", response), ("notes", note)):
                 if text and cfg.has(key):
                     self._set(ws, lay, row, key,
@@ -696,12 +825,7 @@ class Tracker:
                            f"{get_column_letter(lay.cols['status'])}): {', '.join(allowed)}")
 
     def _allowed_statuses(self, ws: Worksheet, lay: Layout) -> list[str]:
-        col = lay.cols["status"]
-        for dv in ws.data_validations.dataValidation:
-            if dv.type == "list" and dv.formula1 and any(
-                    rng.min_col <= col <= rng.max_col for rng in dv.sqref.ranges):
-                return [s.strip() for s in dv.formula1.strip('"').split(",") if s.strip()]
-        return list(self.cfg.statuses.fallback)
+        return dropdown_values(ws, lay.cols["status"]) or list(self.cfg.statuses.fallback)
 
     @staticmethod
     def _copy_row_style(ws: Worksheet, lay: Layout, src: int, dst: int) -> None:

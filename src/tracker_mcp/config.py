@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 REQUIRED_FIELDS = ("company", "role", "status")
 KNOWN_FIELDS = REQUIRED_FIELDS + (
     "num", "link", "applied", "applied_on", "channel", "response", "notes",
-    "followup_on", "followup_contact", "followup_log",
+    "followup_on", "followup_contact", "followup_log", "reached",
 )
 
 
@@ -35,6 +35,10 @@ class Statuses(_Strict):
     # Still waiting for the company: close_stale only touches these.
     waiting: list[str] | None = None   # default: [applied]
     no_response: str = "No response"   # what close_stale sets
+    # For the funnel. A rejection is a reply. Stages run in this order, and a status
+    # in a later stage means the application got through the earlier ones.
+    rejected: list[str] = ["Rejected"]
+    stages: dict[str, list[str]] = {"screening": ["Screening"], "interview": ["Interview"], "offer": ["Offer"]}
     # Used only when the status column has no dropdown in the workbook.
     fallback: list[str] = ["Not applied", "Applied", "Screening", "Interview", "Offer",
                            "Rejected", "Withdrawn", "No response", "Closed"]
@@ -64,6 +68,13 @@ class Messages(_Strict):
     stale_closed: str = "closed: no reply for {days} days"
 
 
+class Funnel(_Strict):
+    # group name -> substrings (any case). A value of the grouped column goes to the
+    # first group with a matching substring, otherwise to its own text up to the
+    # first bracket or dash: "Ashby (direct form)" -> "Ashby".
+    groups: dict[str, list[str]] = {}
+
+
 class Safety(_Strict):
     # Every write needs the user's yes: through the client's confirmation dialog
     # (MCP elicitation) when it has one, otherwise through the token from a dry run.
@@ -82,6 +93,7 @@ class Config(_Strict):
     values: Values = Values()
     followups: Followups = Followups()
     messages: Messages = Messages()
+    funnel: Funnel = Funnel()
     safety: Safety = Safety()
 
     @field_validator("columns")

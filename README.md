@@ -13,6 +13,23 @@ Nothing about my particular tracker is in the code. The sheet, the column
 headers, the status words, the follow-up rule and the texts the server appends
 all come from a small TOML file next to the workbook (see [Config](#config)).
 
+## Getting started
+
+You need [uv](https://docs.astral.sh/uv/) and a clone of this repository.
+
+- **You already keep a tracker in Excel:** `uv run tracker-mcp init ~/path/my-tracker.xlsx`.
+  It finds the sheet and the header row, maps headers to fields (English and Russian
+  headers are understood), works out what each status in the status dropdown means, and
+  writes `my-tracker.tracker-mcp.toml` next to the workbook. The guesses it is unsure
+  about are marked `# CHECK` and listed in its output. The workbook itself is not touched.
+  On my own tracker it reproduced my hand-written config, except for the names of my
+  custom columns.
+- **You don't have one yet:** `uv run tracker-mcp new ~/path/my-tracker.xlsx` creates an
+  empty tracker (dropdowns, a filter, a summary sheet) together with its config.
+
+Then check the mapping with `TRACKER_PATH=~/path/my-tracker.xlsx uv run tracker-mcp --check`
+and connect the server to your client (see [Run](#run)).
+
 ## Tools
 
 | Tool | Kind | What it does |
@@ -23,6 +40,7 @@ all come from a small TOML file next to the workbook (see [Config](#config)).
 | `followups_due` | read | Follow-ups due within N days, overdue first; submitted rows with no follow-up date |
 | `stale_applications` | read | Still waiting, submitted N+ days ago, no follow-up planned ahead |
 | `summary` | read | Counts by status and month; a cohort for a date range |
+| `funnel` | read | Submitted → replied → screening → interview → offer, in total and by channel, source or month |
 | `recent_writes` | read | Audit log of this server's writes |
 | `add_application` | write | New row with the not-applied status; other columns via `extra`; refuses duplicates |
 | `mark_applied` | write | Submitted: date, channel, status, follow-up date by the configured rule |
@@ -93,6 +111,12 @@ salary = "Salary"         # any other key is a custom field
 not_applied = "Not applied"
 applied = "Applied"
 closed = ["Rejected", "Withdrawn", "No response", "Offer"]
+rejected = ["Rejected"]
+
+[statuses.stages]         # funnel stages after a reply, in order
+screening = ["Screening"]
+interview = ["Interview", "Final"]
+offer = ["Offer"]
 
 [followups]
 first_after_days = 10
@@ -105,6 +129,13 @@ column, `followups_due` says so instead of failing elsewhere. The config is
 validated strictly, so a typo in a key is an error, not a silent default.
 `tracker-mcp --check` prints how the config maps the workbook, and the server
 refuses to start on a bad config, with the reason in the client's log.
+
+The funnel needs to know which statuses are a reply and which are stages: `rejected`
+and `[statuses.stages]`. The status column only holds the current state, so a rejection
+after an interview would count as just a reply. An optional `reached` column keeps the
+furthest stage: `set_status` moves it forward and never back. A free-text column such
+as the channel is grouped by its text up to the first bracket or dash ("Ashby (direct
+form)" → "Ashby"), or by the substrings in `[funnel.groups]`.
 
 My own tracker is in Russian; its config is `tests/fixtures/ru.tracker-mcp.toml`.
 The tests run the same code against it and against an English layout with a
@@ -178,12 +209,14 @@ Claude is open. The resulting entry:
 
 - `src/tracker_mcp/tracker.py` holds all file logic and knows nothing about MCP.
 - `src/tracker_mcp/config.py` is the config schema (pydantic, strict) and loader.
+- `src/tracker_mcp/scaffold.py` is `init` and `new`: guessing a config from a workbook,
+  and the empty tracker.
 - `src/tracker_mcp/server.py` holds the MCP tools: type hints become the input
   schema, and each tool makes one call into `Tracker`.
 - `macos/` holds the launcher for Claude Desktop: `launcher.c` and the bundle's `Info.plist`.
 - `tests/` contains the domain tests on my Russian layout, the same logic on an
-  English layout (`test_config.py`), and a test that drives the calls through an
-  in-process MCP client.
+  English layout (`test_config.py`), `init`, `new` and the funnel (`test_scaffold.py`),
+  and a test that drives the calls through an in-process MCP client.
 - `examples/tracker-mcp.example.toml` is a commented config to start from.
 
 Built with the official [MCP Python SDK](https://github.com/modelcontextprotocol/python-sdk) (v2).

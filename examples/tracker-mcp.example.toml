@@ -1,10 +1,15 @@
 # tracker-mcp config. Put it next to the workbook as <workbook name>.tracker-mcp.toml
 # (my-tracker.xlsx -> my-tracker.tracker-mcp.toml), or point TRACKER_CONFIG to it.
 # Check how it maps your file:  TRACKER_PATH=/path/my-tracker.xlsx tracker-mcp --check
+# Quicker start: `tracker-mcp init /path/my-tracker.xlsx` writes a first version of
+# this file from your headers and dropdowns, and marks its guesses with CHECK.
 
 sheet = "Applications"          # the sheet with one row per application
 # summary_sheet = "Summary"     # optional: its formulas are stretched when rows are added
 # header_row = 1                # optional: found automatically (the row with the company header)
+# Columns that hold dates (read in any common format, written as yyyy-mm-dd).
+# Top-level keys go before the first [table]: below [columns] this would become a column.
+date_columns = ["applied_on", "followup_on"]
 
 # field = header text in the header row. Exact match wins, otherwise the first
 # header (left to right) that starts with this text, so "Follow-up" matches
@@ -24,11 +29,9 @@ followup_contact = "Contact"
 followup_log = "Follow-up log"
 # num = "#"                     # running number, filled in for new rows
 # applied = "Applied?"          # a yes/no column; without it "applied" means status is not not_applied
+# reached = "Furthest stage"    # the furthest funnel stage; set_status moves it forward, never back
 # Any other key is a custom field, returned as is and settable via add_application's `extra`:
 # salary = "Salary"
-
-# Columns that hold dates (read in any common format, written as yyyy-mm-dd).
-date_columns = ["applied_on", "followup_on"]
 
 [statuses]
 # Allowed statuses come from the status column's dropdown in the workbook.
@@ -40,6 +43,14 @@ fallback = ["Not applied", "Applied", "Screening", "Interview", "Offer", "Reject
 aliases = { "ghosted" = "No response" }   # other spellings -> the dropdown value
 waiting = ["Applied"]           # still waiting for the company; close_stale only touches these
 no_response = "No response"     # the status close_stale sets
+rejected = ["Rejected"]         # the company said no: counts as a reply in the funnel
+
+# Funnel stages after a reply, in order. A status in a later stage means the
+# application got through the earlier ones.
+[statuses.stages]
+screening = ["Screening"]
+interview = ["Interview", "Technical", "Final"]
+offer = ["Offer"]
 
 [values]
 yes = "Yes"
@@ -58,6 +69,13 @@ applied = "applied"
 applied_with_followup = "applied, follow-up 1 on {date}"
 followup_cancelled = "follow-up {date} cancelled: {status}"
 stale_closed = "closed: no reply for {days} days"
+
+[funnel.groups]
+# For `funnel(by=...)` over a free-text column. A value goes to the first group
+# with a matching substring (any case), otherwise to its text up to the first
+# bracket or dash: "Ashby (direct form)" -> "Ashby".
+"Referral" = ["referral", "referred", "via a friend"]
+"Recruiter" = ["recruiter", "agency"]
 
 [safety]
 # Every write needs the user's yes: the client's confirmation dialog (MCP elicitation)
