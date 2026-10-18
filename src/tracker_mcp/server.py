@@ -20,6 +20,7 @@ import os
 import sys
 from collections import OrderedDict
 from datetime import date
+from pathlib import Path
 from typing import Annotated, Any
 
 from mcp.server import MCPServer
@@ -29,7 +30,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import BaseModel, Field
 
-from .config import ConfigError, load_config
+from .config import ConfigError, config_path, load_config
 from .tracker import Tracker, TrackerError
 
 INSTRUCTIONS = """\
@@ -61,29 +62,54 @@ Confirm = Annotated[str | None, Field(description="Token from the dry run the us
                                                   "when the client shows the server's confirmation dialog")]
 
 _tracker: Tracker | None = None
+# The config file and its (mtime, size) when it was loaded. An edited config is
+# picked up on the next call, without restarting the client. None when a test
+# injects the tracker directly.
+_watch: tuple[Path, tuple[int, int] | None] | None = None
+
+
+def _stamp(path: Path) -> tuple[int, int] | None:
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size
 
 
 def make_tracker() -> Tracker:
-    path = os.environ["TRACKER_PATH"]
-    return Tracker(path, config=load_config(path, os.environ.get("TRACKER_CONFIG")),
-                   backup_dir=os.environ.get("TRACKER_BACKUP_DIR"))
+    global _watch
+    path, explicit = os.environ["TRACKER_PATH"], os.environ.get("TRACKER_CONFIG")
+    cfg_file = config_path(path, explicit)
+    stamp = _stamp(cfg_file)   # taken before reading: an edit during the read is seen next time
+    t = Tracker(path, config=load_config(path, explicit), backup_dir=os.environ.get("TRACKER_BACKUP_DIR"))
+    _watch = (cfg_file, stamp)
+    return t
 
 
 def tracker() -> Tracker:
     global _tracker
     if _tracker is None:
         _tracker = make_tracker()
+    elif _watch is not None and _stamp(_watch[0]) != _watch[1]:
+        try:  # on failure the old stamp stays, so every call retries until the file is fixed
+            _tracker = make_tracker()
+        except ConfigError as e:
+            raise ToolError(f"The config file was edited and no longer loads, so nothing was done: {e}") from e
     return _tracker
 
 
-def call(method: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
+def run(t: Tracker, method: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
     """Run a Tracker method. Expected refusals (conflict, bad status, duplicate)
     go back to the model as a readable tool error; anything else is a crash and
     the SDK hides its text."""
     try:
-        return getattr(tracker(), method)(*args, **kwargs)
+        return getattr(t, method)(*args, **kwargs)
     except TrackerError as e:
         raise ToolError(str(e)) from e
+
+
+def call(method: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    return run(tracker(), method, *args, **kwargs)
 
 
 # ---------------------------------------------------------------- confirmation
@@ -179,7 +205,15 @@ def finish(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], appro
                         "show the user the changes, and after they agree repeat the call with "
                         "confirm=<token from that preview>. A token from another preview, or one made "
                         "before the file changed, does not match.")
-    return call(method, *args, dry_run=False, expected_version=plan["version"], **kwargs)
+    # The user approved this plan; write it only if it is still exactly what would be
+    # written. The file is pinned by its version, but the config may have been edited
+    # or the date moved while the dialog was open.
+    t = tracker()
+    fresh = run(t, method, *args, dry_run=True, expected_version=plan["version"], **kwargs)
+    if plan_token(fresh) != token:
+        raise ToolError("Not written: what would be written changed after the user saw it (the config "
+                        "was edited or the date moved). Show the new preview and ask again.")
+    return run(t, method, *args, dry_run=False, expected_version=plan["version"], **kwargs)
 
 
 Approval = ElicitationResult[WriteConfirmation]

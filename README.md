@@ -72,7 +72,9 @@ overwrite cells. All write tools take `dry_run`, `expected_version` and `confirm
      token from another preview, or from before the file changed, does not match.
 
    Either way the body writes with the plan's version as If-Match, so what lands in
-   the file is exactly what was approved, or nothing. `[safety] confirm_writes =
+   the file is exactly what was approved, or nothing. Just before writing, the body
+   computes the plan once more: if it no longer matches what the user saw (the config
+   was edited or the date moved while the dialog was open), nothing is written. `[safety] confirm_writes =
    false` turns this off.
 4. **Write, verify, swap.** Save to a temp file, re-open it and check every intended
    cell. Check the version once more, back up the current file, then `os.replace`,
@@ -128,7 +130,9 @@ A missing optional column only switches off what needs it: with no follow-up
 column, `followups_due` says so instead of failing elsewhere. The config is
 validated strictly, so a typo in a key is an error, not a silent default.
 `tracker-mcp --check` prints how the config maps the workbook, and the server
-refuses to start on a bad config, with the reason in the client's log.
+refuses to start on a bad config, with the reason in the client's log. Edits to the
+config apply on the next tool call, without restarting the client. If an edit breaks
+the config, every call says why until the file is fixed.
 
 The funnel needs to know which statuses are a reply and which are stages: `rejected`
 and `[statuses.stages]`. The status column only holds the current state, so a rejection

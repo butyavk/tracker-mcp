@@ -1,6 +1,8 @@
 """The same calls through the MCP protocol (in-process client), including the
 server-side confirmation of writes."""
 
+from datetime import date
+
 import anyio
 import pytest
 from mcp import Client
@@ -89,3 +91,69 @@ def test_write_asks_the_user_when_the_client_has_a_dialog(t, answer, mode):
         assert not res.is_error and status_of(t, 7) == "Отказ"
     else:
         assert res.is_error and "did not confirm" in res.content[0].text and status_of(t, 7) == "Подана"
+
+
+@pytest.fixture
+def watched(tmp_path, monkeypatch):
+    """The server as a client starts it: TRACKER_PATH, the config next to the workbook."""
+    from .test_tracker import RU_CONFIG, make_tracker
+    book = make_tracker(tmp_path / "t.xlsx")
+    cfg = tmp_path / "t.tracker-mcp.toml"
+    cfg.write_text(RU_CONFIG.read_text(encoding="utf-8"), encoding="utf-8")
+    monkeypatch.setenv("TRACKER_PATH", str(book))
+    monkeypatch.setenv("TRACKER_BACKUP_DIR", str(tmp_path / "bk"))
+    monkeypatch.delenv("TRACKER_CONFIG", raising=False)
+    monkeypatch.setattr(server, "_tracker", None)
+    monkeypatch.setattr(server, "_watch", None)
+    return cfg
+
+
+def edit(cfg, old, new):
+    import os
+    text = cfg.read_text(encoding="utf-8")
+    assert old in text
+    cfg.write_text(text.replace(old, new), encoding="utf-8")
+    st = os.stat(cfg)   # a later mtime even if the clock is coarse
+    os.utime(cfg, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+
+
+def test_config_edits_apply_without_a_restart(watched):
+    assert server.tracker().cfg.followups.first_after_days == 10
+    edit(watched, "first_after_days = 10", "first_after_days = 7")
+    assert server.tracker().cfg.followups.first_after_days == 7
+
+    async def go():
+        async with Client(server.mcp) as c:
+            edit(watched, 'sheet = "Подачи"', 'sheet = "Подачи"\nsheeet = "typo"')
+            for _ in range(2):   # stays an error until the file is fixed
+                res = await c.call_tool("describe_tracker", {})
+                assert res.is_error and "no longer loads" in res.content[0].text and "sheeet" in res.content[0].text
+            edit(watched, 'sheeet = "typo"', "")
+            res = await c.call_tool("describe_tracker", {})
+            assert not res.is_error and res.structured_content["sheet"] == "Подачи"
+
+    anyio.run(go)
+
+
+@pytest.mark.parametrize("mode", ["legacy", "auto"])
+def test_config_edited_while_the_dialog_is_open(watched, mode):
+    seen = []
+
+    async def dialog(context, params):
+        seen.append(params.message)
+        if len(seen) == 1:   # the user edits the config before answering
+            edit(watched, 'stamp_format = "%d.%m"', 'stamp_format = "%Y-%m-%d"')
+        return ElicitResult(action="accept", content={"confirm": True})
+
+    async def go():
+        async with Client(server.mcp, elicitation_callback=dialog, mode=mode) as c:
+            return await c.call_tool("log_followup", {"row": 7, "text": "nudge"})
+
+    res = anyio.run(go)
+    log = server.tracker().get_application(row=7)["applications"][0]["followup_log"]
+    if mode == "legacy":   # asked mid-call: the body sees the plan moved and refuses
+        assert res.is_error and "changed after the user saw it" in res.content[0].text
+        assert "nudge" not in log
+    else:                  # input-required round: the SDK drops the stale answer and asks again
+        assert len(seen) == 2 and seen[0] != seen[1]
+        assert not res.is_error and f"{date.today().isoformat()}: nudge" in log
