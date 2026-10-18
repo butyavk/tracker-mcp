@@ -1,0 +1,49 @@
+# tracker-mcp: the layout of my own tracker (Russian headers and statuses).
+sheet = "Подачи"
+summary_sheet = "Сводка"
+
+[columns]
+num = "№"
+company = "Компания"
+role = "Роль"
+status = "Статус"
+link = "Ссылка на подачу"
+applied = "Подался"
+applied_on = "Дата подачи"
+channel = "Канал подачи"
+response = "Ответ"
+notes = "Заметки"
+followup_on = "Фоллоу-ап 1"
+followup_contact = "Фоллоу-ап — кому"
+followup_log = "Фоллоу-ап — статус"
+# Custom fields: returned under these keys, settable through add_application's `extra`.
+source = "Источник"
+geography = "География"
+money = "Деньги"
+folder = "Папка"
+prepared = "Что подготовлено"
+gate = "Гейт"
+
+[statuses]
+not_applied = "Не подавался"
+applied = "Подана"
+closed = ["Отказ", "Отозвал", "Ответа нет", "Оффер", "Закрыта"]
+fallback = ["Не подавался", "Подана", "Ответа нет", "Отказ", "Скрининг", "Интервью", "Тех.этап", "Финал", "Оффер", "Отозвал"]
+aliases = { "нет ответа" = "Ответа нет" }
+
+[values]
+yes = "Да"
+no = "Нет"
+no_date = "—"
+separator = " | "
+stamp_format = "%d.%m"
+
+[followups]
+first_after_days = 10
+next_after_days = 14
+weekend_to_monday = true
+
+[messages]
+applied = "подано"
+applied_with_followup = "подано, фоллоу-ап 1 — {date}"
+followup_cancelled = "фоллоу-ап {date} снят — {status}"

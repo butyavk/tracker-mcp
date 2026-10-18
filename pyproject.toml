@@ -1,0 +1,39 @@
+[project]
+name = "tracker-mcp"
+version = "0.1.0"
+description = "MCP server over a job-application tracker kept in an Excel file, with safe writes"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Ivan Rykov" }]
+keywords = ["mcp", "model-context-protocol", "claude", "excel", "job-search"]
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=2.3,<3",
+    "openpyxl>=3.1",
+]
+
+[project.urls]
+Repository = "https://github.com/butyavk/tracker-mcp"
+
+[project.scripts]
+tracker-mcp = "tracker_mcp.server:main"
+
+[dependency-groups]
+dev = ["pytest>=8"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tracker_mcp"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "I", "UP"]

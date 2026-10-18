@@ -1,0 +1,57 @@
+# tracker-mcp config. Put it next to the workbook as <workbook name>.tracker-mcp.toml
+# (my-tracker.xlsx -> my-tracker.tracker-mcp.toml), or point TRACKER_CONFIG to it.
+# Check how it maps your file:  TRACKER_PATH=/path/my-tracker.xlsx tracker-mcp --check
+
+sheet = "Applications"          # the sheet with one row per application
+# summary_sheet = "Summary"     # optional: its formulas are stretched when rows are added
+# header_row = 1                # optional: found automatically (the row with the company header)
+
+# field = header text in the header row. Exact match wins, otherwise the first
+# header (left to right) that starts with this text, so "Follow-up" matches
+# "Follow-up date (1st)". company, role and status are required; the server
+# skips what a missing column would need (no follow-up column -> no follow-up tools).
+[columns]
+company = "Company"
+role = "Role"
+status = "Status"
+link = "Link"
+applied_on = "Applied on"
+channel = "Channel"
+response = "Response"
+notes = "Notes"
+followup_on = "Follow-up date"
+followup_contact = "Contact"
+followup_log = "Follow-up log"
+# num = "#"                     # running number, filled in for new rows
+# applied = "Applied?"          # a yes/no column; without it "applied" means status is not not_applied
+# Any other key is a custom field, returned as is and settable via add_application's `extra`:
+# salary = "Salary"
+
+# Columns that hold dates (read in any common format, written as yyyy-mm-dd).
+date_columns = ["applied_on", "followup_on"]
+
+[statuses]
+# Allowed statuses come from the status column's dropdown in the workbook.
+# fallback is used only when the column has no dropdown.
+not_applied = "Not applied"
+applied = "Applied"
+closed = ["Rejected", "Withdrawn", "No response", "Offer", "Closed"]   # no follow-ups for these
+fallback = ["Not applied", "Applied", "Screening", "Interview", "Offer", "Rejected", "Withdrawn", "No response", "Closed"]
+aliases = { "ghosted" = "No response" }   # other spellings -> the dropdown value
+
+[values]
+yes = "Yes"
+no = "No"
+no_date = "—"                   # follow-up date when none is due
+separator = " | "               # between entries appended to a text cell
+stamp_format = "%Y-%m-%d"       # date prefix of appended entries and {date} in messages
+
+[followups]
+first_after_days = 10           # applied -> follow-up 1
+next_after_days = 14            # follow-up sent -> the next one
+weekend_to_monday = true
+
+[messages]                      # appended to the follow-up log
+applied = "applied"
+applied_with_followup = "applied, follow-up 1 on {date}"
+followup_cancelled = "follow-up {date} cancelled: {status}"

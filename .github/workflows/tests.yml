@@ -1,0 +1,28 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Lint
+        run: uvx ruff check src tests
+      - name: Tests
+        run: |
+          uv sync --frozen
+          uv run --frozen pytest -q
+      - name: Build and smoke-test the macOS launcher
+        if: runner.os == 'macOS'
+        run: |
+          cc -O2 -Wall -Werror -o "$RUNNER_TEMP/tracker-mcp" macos/launcher.c
+          rc=0; "$RUNNER_TEMP/tracker-mcp" /bin/sh -c 'exit 3' || rc=$?
+          test "$rc" -eq 3
