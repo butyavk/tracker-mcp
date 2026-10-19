@@ -102,6 +102,13 @@ def test_merged_rows_are_skipped(tmp_path):
     ("Thank you for applying 02.09 | call with the CTO 15.09", date(2026, 9, 15)),
     ("Applied 01.09 via the site; screening invite 2026-09-05", date(2026, 9, 5)),
     ("We have received your application (02.09)", None),
+    ("Автоподтверждение 02.09, отказ 20.09", date(2026, 9, 20)),
+    # rejections whose subject thanks for the application
+    ("Auto-reply 01.09 || ОТКАЗ 02.10 08:01Z «Thanks for your application to Acme»", date(2026, 10, 2)),
+    ("Автоподтверждение 01.09 || 12.10 23:13 — отказ («Thank you for your application»)", date(2026, 10, 12)),
+    # rejected on the day of applying: the clause says what came
+    ("Автоподтверждение 01.09 15:02Z | ОТКАЗ 01.09 19:08Z: «we have filled the position»", date(2026, 9, 1)),
+    ("Пакет готов 01.09", None),
 ])
 def test_dates_of_confirmations_are_not_reply_dates(tmp_path, response, expected):
     t = build(tmp_path, [{"company": "Acme", "role": "EM", "applied_on": datetime(2026, 9, 1),

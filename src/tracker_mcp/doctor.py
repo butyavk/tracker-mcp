@@ -51,6 +51,12 @@ _NOT_A_REPLY = re.compile(
     r"|\b(applied|submitted|sent (my|the|an?) (cv|application|resume))\b|подал(ся|ась|и)?\b|подан[аоы]?\b"
     r"|подача|отправ\w* (cv|резюме|заявк)",
     re.IGNORECASE)
+# Words of a reply itself: in a clause that also quotes "Thanks for your application"
+# (the subject of many rejections), a date next to one of these is the reply's date.
+_REPLY_WORD = re.compile(
+    r"отказ|reject|declin|not (be )?(moving|move|proceeding) forward|move forward with|other candidates|regret"
+    r"|оффер|\boffer\b|приглаш|invit|интервью|interview|собеседован|скрининг|screening|созвон|звонок|\bcall\b",
+    re.IGNORECASE)
 # A date cell that is only a date: ISO (with an optional time), dd.mm.yyyy, or a serial.
 _WHOLE_DATE = re.compile(r"\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?|\d{1,2}\.\d{1,2}\.\d{4}|\d{5}")
 
@@ -108,11 +114,20 @@ def reply_date_hint(t: Tracker, rec: dict[str, Any], audit_day: date | None) -> 
     text = str(rec.get("response") or "")
     found = []
     for clause in re.split(r";|\||\.\s|\n", text):
-        if _NOT_A_REPLY.search(clause):
-            continue
+        # each date belongs to the nearest marker of its part of the clause (between
+        # commas), else of the clause: a confirmation's date is not a reply's
+        marks = [(m.start(), m.end(), False) for m in _NOT_A_REPLY.finditer(clause)] + \
+                [(m.start(), m.end(), True) for m in _REPLY_WORD.finditer(clause)]
+        parts = [(p.start(), p.end()) for p in re.finditer(r"[^,]+", clause)]
         for m in _ANY_DATE.finditer(clause):
+            a, b = next(((a, b) for a, b in parts if a <= m.start() < b), (0, len(clause)))
+            mine = [k for k in marks if a <= k[0] < b] or marks
+            near = min(mine, key=lambda k: max(k[0] - m.end(), m.start() - k[1], 0), default=None)
+            if near is not None and not near[2]:
+                continue
             d = date_in_text(m.group(1), today, applied)
-            if d and (applied is None or d > applied):   # a reply comes after the submit day
+            # a reply comes after the submit day, or on it when the clause says what came
+            if d and (applied is None or d > applied or (near is not None and d == applied)):
                 found.append((d, clause.strip()))
     if found:
         d, evidence = min(found, key=lambda x: x[0])
