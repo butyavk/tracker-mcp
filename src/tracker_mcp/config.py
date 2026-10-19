@@ -52,6 +52,9 @@ class Values(_Strict):
     no_date: str = "—"               # written into the follow-up date when none is due
     separator: str = " | "           # between entries appended to a text cell
     stamp_format: str = "%Y-%m-%d"   # date prefix of appended entries (strftime)
+    # Extra formats for dates kept as text, tried after ISO and dd.mm.yyyy,
+    # e.g. ["%m/%d/%Y"] for US dates or ["%d/%m/%Y"] for UK ones. `init` detects them.
+    date_formats: list[str] = []
 
 
 class Followups(_Strict):
@@ -116,17 +119,24 @@ class ConfigError(Exception):
 
 
 def config_path(tracker: str | Path, explicit: str | Path | None = None) -> Path:
+    """The config file for a tracker: `explicit`, else next to the file
+    (my-tracker.xlsx -> my-tracker.tracker-mcp.toml), else for a Google Sheet
+    ~/.tracker-mcp/<sheet id>.tracker-mcp.toml."""
     if explicit:
         return Path(explicit).expanduser()
-    tracker = Path(tracker).expanduser()
-    return tracker.with_name(f"{tracker.stem}.tracker-mcp.toml")
+    t = str(tracker)
+    if t.startswith(("https://docs.google.com/spreadsheets/", "gsheet:")):
+        from .gsheets import default_config_path
+        return default_config_path(t)
+    path = Path(t).expanduser()
+    return path.with_name(f"{path.stem}.tracker-mcp.toml")
 
 
 def load_config(tracker: str | Path, explicit: str | Path | None = None) -> Config:
     path = config_path(tracker, explicit)
     if not path.exists():
-        raise ConfigError(f"No config at {path}. Copy examples/tracker-mcp.example.toml "
-                          "there and set your sheet, headers and statuses.")
+        raise ConfigError(f"No config at {path}. Run `tracker-mcp init {tracker}` to write one from "
+                          "your tracker's headers, or `tracker-mcp example` for a commented template.")
     try:
         return Config.model_validate(tomllib.loads(path.read_text(encoding="utf-8")))
     except tomllib.TOMLDecodeError as e:

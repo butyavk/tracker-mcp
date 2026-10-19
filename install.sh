@@ -4,6 +4,11 @@
 # config (the old config is backed up first).
 # Usage: sh install.sh /absolute/path/to/tracker.xlsx
 set -e
+if [ "$(uname -s)" != "Darwin" ]; then
+  echo "install.sh is for Claude Desktop on macOS. On Linux and Windows, add the server to your"
+  echo "client's config as the README shows (Quick start)."
+  exit 1
+fi
 cd "$(dirname "$0")"
 DIR="$(pwd)"
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$HOME/.homebrew/bin:/opt/homebrew/bin:/usr/local/bin:$PATH"

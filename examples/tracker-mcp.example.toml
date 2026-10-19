@@ -1,10 +1,14 @@
-# tracker-mcp config. Put it next to the workbook as <workbook name>.tracker-mcp.toml
-# (my-tracker.xlsx -> my-tracker.tracker-mcp.toml), or point TRACKER_CONFIG to it.
-# Check how it maps your file:  TRACKER_PATH=/path/my-tracker.xlsx tracker-mcp --check
-# Quicker start: `tracker-mcp init /path/my-tracker.xlsx` writes a first version of
-# this file from your headers and dropdowns, and marks its guesses with CHECK.
+# tracker-mcp config. You rarely write it by hand: on first start the server, or
+# `tracker-mcp init <tracker>`, writes one from your headers and dropdowns and marks
+# its guesses with CHECK. This file explains every key.
+#
+# Where it lives: next to the tracker as <name>.tracker-mcp.toml
+# (my-tracker.xlsx or my-tracker.csv -> my-tracker.tracker-mcp.toml). For a Google
+# Sheet: ~/.tracker-mcp/<sheet id>.tracker-mcp.toml. TRACKER_CONFIG points elsewhere.
+# Check how it maps your tracker:  tracker-mcp --check --tracker /path/my-tracker.xlsx
+# Edits apply on the server's next call; no restart needed.
 
-sheet = "Applications"          # the sheet with one row per application
+sheet ="Applications"          # the sheet with one row per application (a CSV file has one: its name)
 # summary_sheet = "Summary"     # optional: its formulas are stretched when rows are added
 # header_row = 1                # optional: found automatically (the row with the company header)
 # Columns that hold dates (read in any common format, written as yyyy-mm-dd).
@@ -34,8 +38,8 @@ followup_log = "Follow-up log"
 # salary = "Salary"
 
 [statuses]
-# Allowed statuses come from the status column's dropdown in the workbook.
-# fallback is used only when the column has no dropdown.
+# Allowed statuses come from the status column's dropdown (Excel data validation,
+# or a Google Sheets dropdown). fallback is used when there is none, as in a CSV file.
 not_applied = "Not applied"
 applied = "Applied"
 closed = ["Rejected", "Withdrawn", "No response", "Offer", "Closed"]   # no follow-ups for these
@@ -58,6 +62,9 @@ no = "No"
 no_date = "—"                   # follow-up date when none is due
 separator = " | "               # between entries appended to a text cell
 stamp_format = "%Y-%m-%d"       # date prefix of appended entries and {date} in messages
+# Dates kept as text are read as ISO (2026-10-19) and dd.mm.yyyy; list other formats
+# here, tried in order. `init` detects them. US: ["%m/%d/%Y"]; UK: ["%d/%m/%Y"].
+date_formats = []
 
 [followups]
 first_after_days = 10           # applied -> follow-up 1

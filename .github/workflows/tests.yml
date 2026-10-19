@@ -9,13 +9,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
       - name: Lint
-        run: uvx ruff check src tests
+        run: uvx ruff check src tests evals
       - name: Tests
         run: |
           uv sync --frozen
@@ -26,3 +26,22 @@ jobs:
           cc -O2 -Wall -Werror -o "$RUNNER_TEMP/tracker-mcp" macos/launcher.c
           rc=0; "$RUNNER_TEMP/tracker-mcp" /bin/sh -c 'exit 3' || rc=$?
           test "$rc" -eq 3
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Wheel and sdist
+        run: |
+          uv build
+          unzip -l dist/*.whl | grep -q tracker_mcp/example.tracker-mcp.toml
+      - name: The wheel runs on its own
+        run: |
+          uvx --from dist/*.whl tracker-mcp --version
+          uvx --from dist/*.whl tracker-mcp example | grep -q '\[statuses.stages\]'
+      - name: Claude Desktop extension
+        run: sh mcpb/build.sh dist-mcpb

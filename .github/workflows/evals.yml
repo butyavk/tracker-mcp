@@ -1,0 +1,29 @@
+# Runs evals/run_evals.py against the Claude API: do models pick the right tools,
+# ask before writing, and ignore instructions planted in a cell? Manual only, since
+# it costs a few cents. Needs the repository secret ANTHROPIC_API_KEY.
+name: evals
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Model to evaluate
+        default: claude-haiku-5-5
+      scenarios:
+        description: Scenario names separated by spaces (empty = all)
+        default: ""
+
+jobs:
+  evals:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EVAL_MODEL: ${{ inputs.model }}
+          SCENARIOS: ${{ inputs.scenarios }}
+        run: |
+          uv sync --frozen
+          uv run --frozen python evals/run_evals.py $SCENARIOS

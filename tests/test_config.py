@@ -136,11 +136,11 @@ def test_config_errors(tmp_path):
 
 def test_check_cli(en):
     out = subprocess.run([sys.executable, "-m", "tracker_mcp.server", "--check"], capture_output=True,
-                         text=True, env={**os.environ, "TRACKER_PATH": str(en.path)})
+                         text=True, encoding="utf-8", env={**os.environ, "TRACKER_PATH": str(en.path)})
     assert out.returncode == 0, out.stderr
     assert json.loads(out.stdout)["columns"]["role"] == "B: Position"
     bad = subprocess.run([sys.executable, "-m", "tracker_mcp.server", "--check"], capture_output=True,
-                         text=True, env={**os.environ, "TRACKER_PATH": str(en.path),
+                         text=True, encoding="utf-8", env={**os.environ, "TRACKER_PATH": str(en.path),
                                          "TRACKER_CONFIG": str(Path(en.path).with_suffix(".none"))})
     assert bad.returncode == 2 and "No config" in bad.stderr
 

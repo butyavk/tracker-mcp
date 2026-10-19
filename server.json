@@ -1,0 +1,48 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.butyavk/tracker-mcp",
+  "title": "Job-application tracker",
+  "description": "Your job-application tracker in Excel, CSV or Google Sheets: follow-ups, funnel, confirmed writes",
+  "version": "0.3.0",
+  "websiteUrl": "https://github.com/butyavk/tracker-mcp",
+  "repository": {
+    "url": "https://github.com/butyavk/tracker-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "tracker-mcp",
+      "version": "0.3.0",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "TRACKER_PATH",
+          "description": "Your tracker: an .xlsx or .csv file, or a Google Sheets URL",
+          "format": "filepath",
+          "isRequired": true,
+          "placeholder": "/Users/you/Documents/job-tracker.xlsx"
+        },
+        {
+          "name": "TRACKER_CONFIG",
+          "description": "Its config, if not <tracker>.tracker-mcp.toml next to it (written on first start)",
+          "format": "filepath"
+        },
+        {
+          "name": "TRACKER_BACKUP_DIR",
+          "description": "Where backups and the audit log go (default: backups-tracker-mcp next to the tracker)",
+          "format": "filepath"
+        },
+        {
+          "name": "GOOGLE_APPLICATION_CREDENTIALS",
+          "description": "Google Sheets only: a service account key, instead of `tracker-mcp auth google`",
+          "format": "filepath"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,102 @@
+# Publishes a release when a tag like v0.3.0 is pushed:
+#   1. PyPI (trusted publishing: no token; the PyPI project trusts this workflow),
+#   2. the official MCP Registry (GitHub OIDC: the io.github.butyavk namespace),
+#   3. a GitHub release with the Claude Desktop extension (.mcpb) attached.
+# The tag must match the version in pyproject.toml, server.json and mcpb/manifest.json.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: The tag matches the version everywhere
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          grep -qx "version = \"$v\"" pyproject.toml
+          test "$(jq -r .version server.json)" = "$v"
+          test "$(jq -r '.packages[0].version' server.json)" = "$v"
+          test "$(jq -r .version mcpb/manifest.json)" = "$v"
+          grep -q "^## $v" CHANGELOG.md
+      - name: Tests
+        run: |
+          uv sync --frozen
+          uv run --frozen pytest -q
+      - name: Package
+        run: uv build
+      - name: Claude Desktop extension
+        run: sh mcpb/build.sh dist-mcpb
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mcpb
+          path: dist-mcpb/
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/tracker-mcp
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  registry:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Wait until PyPI serves the new version
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          for i in $(seq 30); do
+            curl -fsS "https://pypi.org/pypi/tracker-mcp/$v/json" >/dev/null && exit 0
+            sleep 10
+          done
+          echo "PyPI does not serve tracker-mcp $v yet"; exit 1
+      - name: Install mcp-publisher
+        run: |
+          curl -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz" | tar xz mcp-publisher
+      - name: Publish to the MCP Registry
+        run: |
+          ./mcp-publisher login github-oidc
+          ./mcp-publisher publish
+
+  github-release:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+      - name: Release with the extension attached
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          v="${GITHUB_REF_NAME#v}"
+          awk -v v="$v" '/^## /{p = index($0, "## " v) == 1; next} p' CHANGELOG.md > notes.md
+          gh release create "$GITHUB_REF_NAME" --title "tracker-mcp $v" --notes-file notes.md \
+            artifacts/mcpb/*.mcpb artifacts/dist/*

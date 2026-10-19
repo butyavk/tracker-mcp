@@ -4,3 +4,6 @@ __pycache__/
 .pytest_cache/
 *.xlsx
 backups-tracker-mcp/
+dist/
+dist-mcpb/
+*.mcpb

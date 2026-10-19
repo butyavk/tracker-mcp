@@ -1,0 +1,66 @@
+{
+  "$schema": "https://raw.githubusercontent.com/modelcontextprotocol/mcpb/main/schemas/mcpb-manifest-v0.4.schema.json",
+  "manifest_version": "0.4",
+  "name": "tracker-mcp",
+  "display_name": "Job-application tracker",
+  "version": "0.3.0",
+  "description": "Ask Claude about your job-application tracker in Excel or CSV, and let it record what happened, with your confirmation.",
+  "long_description": "Point it at the spreadsheet where you keep your job applications. Claude can then answer \"which follow-ups are due this week?\", \"what's the status with Acme?\" or \"which channel gets me the most replies?\", and record what happened: \"I applied to Globex via LinkedIn\", \"Initech rejected me\".\n\nOn first start the server reads your headers and writes a small config next to the file (`<name>.tracker-mcp.toml`); Claude tells you what to check in it. Every write is shown to you first and needs your yes. The server makes a backup before each write, refuses to write while Excel has the file open, and can undo its last write.\n\nGoogle Sheets trackers work too, but need a one-time sign-in from the command line: see the README.",
+  "author": {
+    "name": "Ivan Rykov",
+    "url": "https://github.com/butyavk"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/butyavk/tracker-mcp.git"
+  },
+  "homepage": "https://github.com/butyavk/tracker-mcp",
+  "documentation": "https://github.com/butyavk/tracker-mcp#readme",
+  "support": "https://github.com/butyavk/tracker-mcp/issues",
+  "icon": "icon.png",
+  "server": {
+    "type": "uv",
+    "entry_point": "src/tracker_mcp/server.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "--frozen", "--no-dev", "--quiet", "tracker-mcp"],
+      "env": {
+        "TRACKER_PATH": "${user_config.tracker}"
+      }
+    }
+  },
+  "user_config": {
+    "tracker": {
+      "type": "file",
+      "title": "Your tracker",
+      "description": "The .xlsx or .csv file with your applications, one row each. Don't have one? Create an empty file in Excel with the headers Company, Role, Status, Applied on, Follow-up date, Notes.",
+      "required": true
+    }
+  },
+  "tools": [
+    {"name": "describe_tracker", "description": "How the tracker is laid out: columns, statuses, follow-up rule"},
+    {"name": "list_applications", "description": "Filter applications by status, text or submit dates"},
+    {"name": "get_application", "description": "Everything recorded for one application"},
+    {"name": "followups_due", "description": "Follow-ups due soon, overdue first"},
+    {"name": "stale_applications", "description": "Applications with no reply for N days"},
+    {"name": "summary", "description": "Counts by status and month"},
+    {"name": "funnel", "description": "Replies, interviews and offers, by channel, source or month"},
+    {"name": "recent_writes", "description": "Audit log of the server's writes"},
+    {"name": "add_application", "description": "Add an application (asks you first)"},
+    {"name": "mark_applied", "description": "Record a submission and plan the follow-up (asks you first)"},
+    {"name": "set_status", "description": "Change a status (asks you first)"},
+    {"name": "log_followup", "description": "Record a sent follow-up, plan the next one (asks you first)"},
+    {"name": "close_stale", "description": "Close applications with no reply (asks you first)"},
+    {"name": "undo_last_write", "description": "Undo the server's last write (asks you first)"}
+  ],
+  "prompts_generated": true,
+  "keywords": ["job search", "job tracker", "applications", "excel", "csv", "google sheets", "follow-ups"],
+  "license": "MIT",
+  "privacy_policies": ["https://policies.google.com/privacy"],
+  "compatibility": {
+    "platforms": ["darwin", "win32", "linux"],
+    "runtimes": {
+      "python": ">=3.11"
+    }
+  }
+}

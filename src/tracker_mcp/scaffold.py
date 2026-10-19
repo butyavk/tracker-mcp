@@ -1,14 +1,16 @@
-"""Getting started: write a config for an existing workbook, or create a new one.
+"""Getting started: write a config for an existing tracker, or create a new one.
 
-    tracker-mcp init my-tracker.xlsx    # guess the config from headers and dropdowns
-    tracker-mcp new my-tracker.xlsx     # an empty tracker plus its config
+    tracker-mcp init my-tracker.xlsx            # guess the config from headers and dropdowns
+    tracker-mcp init my-tracker.csv             # a CSV export (Notion, Huntr, Teal...)
+    tracker-mcp init https://docs.google.com/spreadsheets/d/<id>/edit
+    tracker-mcp new my-tracker.xlsx             # an empty tracker plus its config (.xlsx or .csv)
 
-`init` reads the workbook and guesses: which sheet and row hold the headers, which
-header is which field, and what each status in the status dropdown means. It
-writes the guess as a commented TOML file next to the workbook and marks with
-`# CHECK` whatever it was unsure about. Nothing in the workbook changes.
-The patterns understand English and Russian headers; anything else ends up in
-the "check by hand" list, never in a silent default.
+`init` reads the tracker and guesses: which sheet and row hold the headers, which
+header is which field, what each status means, and how text dates are written.
+It writes the guess as a commented TOML file and marks with `# CHECK` whatever it
+was unsure about. Nothing in the tracker changes. The patterns understand English
+and Russian; anything else ends up in the "check by hand" list, never in a
+silent default.
 """
 
 from __future__ import annotations
@@ -28,7 +30,23 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .config import ConfigError, config_path, load_config
+from .stores import is_google_sheet, open_store
 from .tracker import Tracker, TrackerError, dropdown_values, parse_date
+
+# Text date formats init tries when a date column holds text the built-in parser
+# does not read (ISO, dd.mm.yyyy and spreadsheet dates are always read).
+DATE_CANDIDATES = ["%m/%d/%Y", "%d/%m/%Y", "%m/%d/%y", "%d/%m/%y", "%Y/%m/%d", "%b %d, %Y", "%B %d, %Y",
+                   "%d %b %Y", "%d %B %Y", "%m-%d-%Y", "%d-%m-%Y", "%b %d %Y", "%d.%m.%y"]
+# Statuses added when the tracker has no dropdown and its data lacks a kind, so the
+# server can still set them. By language of the headers.
+STANDARD = {
+    "en": {"not_applied": "Not applied", "applied": "Applied", "screening": "Screening",
+           "interview": "Interview", "offer": "Offer", "rejected": "Rejected", "withdrawn": "Withdrawn",
+           "no_response": "No response"},
+    "ru": {"not_applied": "Не подавался", "applied": "Подана", "screening": "Скрининг",
+           "interview": "Интервью", "offer": "Оффер", "rejected": "Отказ", "withdrawn": "Отозвал",
+           "no_response": "Ответа нет"},
+}
 
 # Field -> header pattern (case-insensitive). Order matters: a header goes to the
 # first field that claims it, so the specific follow-up fields come before
@@ -102,6 +120,7 @@ class Guess:
     reached_words: dict[str, list[str]]          # stage -> words of the reached column's own dropdown
     summary_sheet: str | None
     lang: str
+    date_formats: list[str] = field(default_factory=list)
     checks: list[str] = field(default_factory=list)
 
 
@@ -141,8 +160,8 @@ def _find_header(wb, sheet: str | None) -> tuple[Worksheet, int, dict[str, tuple
     if best is None:
         where = f"sheet «{sheet}»" if sheet else "any sheet"
         raise TrackerError(f"No header row found in {where}: looked for a company column next to a "
-                           "role or status column in the first 30 rows. Write the config by hand from "
-                           "examples/tracker-mcp.example.toml.")
+                           "role or status column in the first 30 rows. Write the config by hand: "
+                           "`tracker-mcp example` prints a commented one.")
     return best
 
 
@@ -169,9 +188,37 @@ def _one_line(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _date_formats(samples: list[str], lang: str) -> tuple[list[str], list[str], list[str]]:
+    """Formats that read the text dates the built-in parser does not, the values no
+    format reads, and notes on ambiguity (03/04/2026: March or April?)."""
+    todo = [s for s in samples if parse_date(s) is None]
+    if not todo:
+        return [], [], []
+    scores = []
+    for fmt in DATE_CANDIDATES:
+        ok = sum(parse_date(s, [fmt]) is not None for s in todo)
+        if ok:
+            scores.append((ok, fmt))
+    if not scores:
+        return [], todo, []
+    best = max(ok for ok, _ in scores)
+    picks = [fmt for ok, fmt in scores if ok == best]
+    notes = []
+    if "%m/%d/%Y" in picks and "%d/%m/%Y" in picks:   # every date has both parts <= 12
+        pick = "%d/%m/%Y" if lang == "ru" else "%m/%d/%Y"
+        notes.append(f"dates like «{todo[0]}» could be month-first or day-first; assumed "
+                     f"{'day' if pick.startswith('%d') else 'month'}-first ({pick})")
+    else:
+        pick = picks[0]
+    failed = [s for s in todo if parse_date(s, [pick]) is None]
+    return [pick], failed, notes
+
+
 def guess(path: str | Path, sheet: str | None = None) -> Guess:
-    path = Path(path).expanduser()
-    wb = openpyxl.load_workbook(path)
+    store = open_store(path)
+    wb, _, _ = store.load()
+    if store.single_sheet:
+        sheet = None
     ws, header_row, fields = _find_header(wb, sheet)
     headers = _headers(ws, header_row)
     company_col = fields["company"][0]
@@ -203,8 +250,8 @@ def guess(path: str | Path, sheet: str | None = None) -> Guess:
 
     status_col = fields["status"][0] if "status" in fields else None
     if status_col is None:
-        raise TrackerError("No status column found. Write the config by hand from "
-                           "examples/tracker-mcp.example.toml.")
+        raise TrackerError("No status column found. Write the config by hand: "
+                           "`tracker-mcp example` prints a commented one.")
     statuses, statuses_from = dropdown_values(ws, status_col), "dropdown"
     if not statuses:
         statuses = list(dict.fromkeys(str(v).strip() for v in values(status_col)))
@@ -242,16 +289,58 @@ def guess(path: str | Path, sheet: str | None = None) -> Guess:
         for row in other.iter_rows() for c in row)), None)
     lang = "ru" if any(re.search("[а-яё]", h, re.I) for h in headers.values()) else "en"
     mapped = {c for c, _ in fields.values()}
+
+    # Text dates: find the format, report what no format reads.
+    date_formats: list[str] = []
+    texts = [str(v).strip() for f in ("applied_on", "followup_on") if f in fields
+             for v in values(fields[f][0]) if isinstance(v, str)]
+    if texts:
+        date_formats, failed, notes = _date_formats(texts, lang)
+        checks.extend(notes)
+        if failed:
+            sample = ", ".join(f"«{x}»" for x in failed[:3])
+            checks.append(f"{len(failed)} value(s) in the date columns are not dates the server can read "
+                          f"({sample}); fix them in the tracker or add a format to values.date_formats")
+
+    # Columns the follow-up tools need.
+    if "followup_on" not in fields:
+        hint = next((h for c, h in headers.items()
+                     if c not in mapped and re.search(r"next|step|follow|фоллоу", h, re.I)), None)
+        checks.append("no follow-up date column: followups_due, log_followup and close_stale are off. Add a "
+                      "column such as «Follow-up date»" + (f" («{hint}» holds text, not dates)" if hint else "")
+                      + " and run init again")
+    elif "followup_log" not in fields:
+        checks.append("no follow-up log column: log_followup is off. Add a column such as «Follow-up log»")
+    if "followup_contact" in fields and not re.search(r"follow|фоллоу", fields["followup_contact"][1], re.I):
+        checks.append(f"«{fields['followup_contact'][1]}» is used as the follow-up contact: "
+                      "log_followup(contact=...) replaces what is there")
+
+    # No dropdown: add the standard statuses the data does not have yet.
+    if statuses_from != "dropdown":
+        added = []
+        for kind, word in STANDARD[lang].items():
+            if not meaning[kind] and word not in statuses:
+                meaning[kind].append(word)
+                statuses.append(word)
+                added.append(word)
+        if added:
+            checks.append(f"no status dropdown: added {', '.join(added)} to the allowed statuses (fallback)")
+        checks[:] = [c for c in checks if not c.startswith(("statuses.not_applied", "statuses.applied (",
+                                                             "statuses.no_response"))]
     return Guess(
         sheet=ws.title, header_row=header_row, rows=len(data_rows),
         columns=dict(sorted(fields.items(), key=lambda kv: kv[1][0])),
         unmapped=[(c, h) for c, h in headers.items() if c not in mapped],
         statuses=statuses, statuses_from=statuses_from, meaning=meaning,
         yes_no=yes_no, reached_words=reached_words, summary_sheet=summary, lang=lang,
-        checks=[_one_line(c) for c in checks])
+        date_formats=date_formats, checks=[_one_line(c) for c in checks])
 
 
 # ---------------------------------------------------------------- TOML
+
+def _shell(text: str) -> str:
+    return f'"{text}"' if re.search(r"[\s&?#]", text) else text
+
 
 def _q(s: str) -> str:
     return json.dumps(s, ensure_ascii=False)
@@ -268,7 +357,7 @@ def _key(text: str, col: int) -> str:
     return slug if re.fullmatch(r"[a-z][a-z0-9_]{0,30}", slug or "") else f"col_{get_column_letter(col).lower()}"
 
 
-def render(g: Guess) -> str:
+def render(g: Guess, target: str = "<tracker>") -> str:
     m = g.meaning
     first = lambda kind, default: m[kind][0] if m[kind] else default  # noqa: E731
     not_applied = first("not_applied", "Not applied")
@@ -287,8 +376,8 @@ def render(g: Guess) -> str:
     yes, no = g.yes_no or ("Yes", "No")
     lines = [
         "# tracker-mcp config, written by `tracker-mcp init`. Lines marked CHECK are guesses;",
-        "# every key is described in examples/tracker-mcp.example.toml.",
-        "# See how it maps the workbook:  TRACKER_PATH=<workbook> tracker-mcp --check",
+        "# `tracker-mcp example` prints a config with every key explained.",
+        f"# See how it maps the tracker:  tracker-mcp --check --tracker {_shell(target)}",
         "",
         f"sheet = {_q(g.sheet)}",
         f"header_row = {g.header_row}",
@@ -312,7 +401,7 @@ def render(g: Guess) -> str:
         f"rejected = {_list(rejected)}",
         f"closed = {_list(closed)}",
     ]
-    if g.statuses_from == "data":
+    if g.statuses_from != "dropdown":
         lines.append(f"fallback = {_list(g.statuses)}   # the status column has no dropdown")
     lines += ["", "[statuses.stages]               # funnel stages after a reply, in order"]
     lines += [f"{k} = {_list(v)}" for k, v in stages.items()]
@@ -322,6 +411,8 @@ def render(g: Guess) -> str:
               'no_date = "—"',
               'separator = " | "',
               f"stamp_format = {_q('%d.%m' if g.lang == 'ru' else '%Y-%m-%d')}",
+              *([f"date_formats = {_list(g.date_formats)}   # how this tracker writes text dates"]
+                if g.date_formats else []),
               "", "[followups]", "first_after_days = 10", "next_after_days = 14", "weekend_to_monday = true",
               "", "[messages]                      # appended to the follow-up log"]
     lines += [f"{k} = {_q(v)}" for k, v in MESSAGES[g.lang].items()]
@@ -348,35 +439,41 @@ def report(g: Guess, out: Path | None) -> str:
     return "\n".join(lines)
 
 
+def _target(path: str | Path) -> str:
+    t = str(path)
+    return t if is_google_sheet(t) else str(Path(t).expanduser().resolve())
+
+
 def init(path: str | Path, *, out: str | Path | None = None, sheet: str | None = None,
          force: bool = False, write: bool = True) -> tuple[Path | None, Guess, str]:
-    path = Path(path).expanduser()
-    if not path.exists():
-        raise TrackerError(f"No such workbook: {path}")
-    g = guess(path, sheet)
-    text = render(g)
-    target = Path(out).expanduser() if out else config_path(path)
+    t = _target(path)
+    if not is_google_sheet(t) and not Path(t).exists():
+        raise TrackerError(f"No such tracker: {t}")
+    g = guess(t, sheet)
+    text = render(g, t)
+    target = Path(out).expanduser() if out else config_path(t)
     if write and target.exists() and not force:
         raise TrackerError(f"{target} already exists. Pass --force to overwrite it, "
                            "or --print to only see the guess.")
     try:
-        check(path, text)
+        check(t, text)
     except TrackerError as e:
         if write:
             raise
         text = f"# DOES NOT WORK YET: {_one_line(str(e))}\n{text}"
     if write:
+        target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(text, encoding="utf-8")
     return (target if write else None), g, text
 
 
-def check(path: Path, text: str) -> None:
-    """The guess must load and map the workbook before it is written anywhere."""
+def check(target: str, text: str) -> None:
+    """The guess must load and map the tracker before it is written anywhere."""
     with tempfile.TemporaryDirectory() as d:
         tmp = Path(d) / "guess.tracker-mcp.toml"
         tmp.write_text(text, encoding="utf-8")
         try:
-            Tracker(path, config=load_config(path, tmp), backup_dir=d).describe()
+            Tracker(target, config=load_config(target, tmp), backup_dir=d).describe()
         except (ConfigError, TrackerError) as e:
             raise TrackerError(f"The guessed config does not work: {e}. Nothing was written; "
                                "see the guess with --print and fix it by hand.") from e
@@ -393,17 +490,23 @@ TEMPLATE_WIDTHS = [5, 22, 32, 30, 16, 10, 12, 18, 14, 14, 30, 14, 24, 40, 40]
 
 
 def new_tracker(path: str | Path, *, force_config: bool = False) -> tuple[Path, Path]:
-    """An empty tracker that every tool works with, plus its config (made by init)."""
-    path = Path(path).expanduser()
-    if path.suffix.lower() != ".xlsx":
-        raise TrackerError("The tracker must be an .xlsx file")
+    """An empty tracker that every tool works with, plus its config (made by init).
+    .xlsx gets dropdowns, a filter and a summary sheet; .csv gets the header row."""
+    path = Path(path).expanduser().resolve()
+    if path.suffix.lower() not in (".xlsx", ".csv"):
+        raise TrackerError("The tracker must be an .xlsx or a .csv file. For Google Sheets, import the "
+                           ".xlsx that `new` makes (File → Import), then run `tracker-mcp init <sheet URL>`.")
     if not path.parent.is_dir():
         raise TrackerError(f"No such folder: {path.parent}")
     if path.exists():
-        raise TrackerError(f"{path} already exists; `new` never overwrites a workbook. "
+        raise TrackerError(f"{path} already exists; `new` never overwrites a tracker. "
                            "For an existing tracker use `tracker-mcp init`.")
     if config_path(path).exists() and not force_config:
         raise TrackerError(f"{config_path(path)} already exists. Pass --force to overwrite it.")
+    if path.suffix.lower() == ".csv":
+        path.write_text(",".join(TEMPLATE_HEADERS) + "\n", encoding="utf-8")
+        target, _, _ = init(path, force=True)
+        return path, target
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Applications"
@@ -439,33 +542,59 @@ def new_tracker(path: str | Path, *, force_config: bool = False) -> tuple[Path, 
     return path, target
 
 
+def example_config() -> str:
+    """The commented example config: packaged with the wheel, or from a clone."""
+    from importlib import resources
+    try:
+        return (resources.files("tracker_mcp") / "example.tracker-mcp.toml").read_text(encoding="utf-8")
+    except (FileNotFoundError, OSError):
+        repo = Path(__file__).resolve().parents[2] / "examples" / "tracker-mcp.example.toml"
+        return repo.read_text(encoding="utf-8")
+
+
 # ---------------------------------------------------------------- CLI
+
+def _next(target: str) -> str:
+    return (f"\nNext, check the mapping:  tracker-mcp --check --tracker {_shell(target)}\n"
+            "(from a clone of the repository: uv run tracker-mcp ...)")
+
 
 def cli(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="tracker-mcp")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    p_init = sub.add_parser("init", help="write a config for an existing workbook")
-    p_init.add_argument("workbook")
+    p_init = sub.add_parser("init", help="write a config for an existing tracker (.xlsx, .csv, Google Sheet URL)")
+    p_init.add_argument("tracker")
     p_init.add_argument("--sheet", help="the sheet with one row per application (default: guessed)")
-    p_init.add_argument("--config", help="where to write (default: <workbook>.tracker-mcp.toml next to it)")
+    p_init.add_argument("--config", help="where to write (default: <tracker>.tracker-mcp.toml next to it; "
+                                         "for a Google Sheet ~/.tracker-mcp/<id>.tracker-mcp.toml)")
     p_init.add_argument("--force", action="store_true", help="overwrite an existing config")
     p_init.add_argument("--print", dest="print_only", action="store_true",
                         help="print the config instead of writing it")
-    p_new = sub.add_parser("new", help="create an empty tracker and its config")
-    p_new.add_argument("workbook")
+    p_new = sub.add_parser("new", help="create an empty tracker (.xlsx or .csv) and its config")
+    p_new.add_argument("tracker")
     p_new.add_argument("--force", action="store_true", help="overwrite an existing config")
+    sub.add_parser("example", help="print a config with every key explained")
+    p_auth = sub.add_parser("auth", help="sign in to Google once, for trackers in Google Sheets")
+    p_auth.add_argument("provider", choices=["google"])
+    p_auth.add_argument("--client-secret", required=True,
+                        help="client_secret.json of an OAuth client of type Desktop app (Google Cloud console)")
+    p_auth.add_argument("--no-browser", action="store_true", help="only print the sign-in link")
     args = parser.parse_args(argv)
     try:
         if args.cmd == "init":
-            target, g, text = init(args.workbook, out=args.config, sheet=args.sheet, force=args.force,
+            target, g, text = init(args.tracker, out=args.config, sheet=args.sheet, force=args.force,
                                    write=not args.print_only)
-            print(text if args.print_only else report(g, target))
-            if not args.print_only:
-                print(f"\nNext: TRACKER_PATH={Path(args.workbook).expanduser().resolve()} tracker-mcp --check")
+            print(text if args.print_only else report(g, target) + _next(_target(args.tracker)))
+        elif args.cmd == "new":
+            book, cfg = new_tracker(args.tracker, force_config=args.force)
+            print(f"Created {book}\nand its config {cfg}" + _next(str(book)))
+        elif args.cmd == "example":
+            print(example_config())
         else:
-            book, cfg = new_tracker(args.workbook, force_config=args.force)
-            print(f"Created {book}\nand its config {cfg}\n"
-                  f"Next: TRACKER_PATH={book.resolve()} tracker-mcp --check")
+            from .gsheets import login
+            token = login(args.client_secret, open_browser=not args.no_browser)
+            print(f"Signed in. The token is in {token} (keep it private).\n"
+                  "Next: tracker-mcp init https://docs.google.com/spreadsheets/d/<id>/edit")
     except TrackerError as e:
         print(f"tracker-mcp: {e}", file=sys.stderr)
         return 2

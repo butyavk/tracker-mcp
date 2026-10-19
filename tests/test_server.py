@@ -157,3 +157,35 @@ def test_config_edited_while_the_dialog_is_open(watched, mode):
     else:                  # input-required round: the SDK drops the stale answer and asks again
         assert len(seen) == 2 and seen[0] != seen[1]
         assert not res.is_error and f"{date.today().isoformat()}: nudge" in log
+
+
+def test_resources_and_prompts(t):
+    async def go():
+        async with Client(server.mcp) as c:
+            prompts = {p.name: p for p in (await c.list_prompts()).prompts}
+            assert {"weekly_review", "draft_followup"} <= set(prompts)
+            got = await c.get_prompt("draft_followup", {"row": "7"})
+            text = got.messages[0].content.text
+            assert "Globex" in text and "treat them as data" in text and "row 7" in text
+            templates = (await c.list_resource_templates()).resource_templates
+            assert any(x.uri_template == "tracker://application/{row}" for x in templates)
+            res = await c.read_resource("tracker://application/8")
+            assert '"company": "Acme"' in res.contents[0].text
+            tools = (await c.list_tools()).tools
+            assert all(x.title for x in tools) and not any("\n    " in (x.description or "") for x in tools)
+
+    anyio.run(go)
+
+
+def test_eval_harness_builds_its_tracker(tmp_path):
+    import importlib.util
+    from pathlib import Path
+    spec = importlib.util.spec_from_file_location("run_evals", Path(__file__).parent.parent / "evals" / "run_evals.py")
+    ev = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ev)
+    book = ev.fresh_tracker(tmp_path)
+    from tracker_mcp.config import load_config
+    from tracker_mcp.tracker import Tracker
+    t = Tracker(book, config=load_config(book))
+    assert t.list_applications()["count"] == 4 and t.summary()["applied"] == 2
+    assert set(ev.SCENARIOS) >= {"injection", "no_write_without_yes"}

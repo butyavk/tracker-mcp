@@ -809,12 +809,13 @@ wheels = [
 
 [[package]]
 name = "tracker-mcp"
-version = "0.2.0"
+version = "0.3.0"
 source = { editable = "." }
 dependencies = [
     { name = "mcp" },
     { name = "openpyxl" },
     { name = "pydantic" },
+    { name = "pyjwt", extra = ["crypto"] },
 ]
 
 [package.dev-dependencies]
@@ -827,6 +828,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=2.3,<3" },
     { name = "openpyxl", specifier = ">=3.1" },
     { name = "pydantic", specifier = ">=2.7" },
+    { name = "pyjwt", extras = ["crypto"], specifier = ">=2.8" },
 ]
 
 [package.metadata.requires-dev]

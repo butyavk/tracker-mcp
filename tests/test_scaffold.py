@@ -50,9 +50,10 @@ def test_init_on_a_sheet_without_dropdowns(tmp_path):
     cfg = load_config(path)
     assert cfg.columns["applied_on"] == "Applied"          # a column of dates is the date of applying
     assert "applied" not in cfg.columns and cfg.columns["role"] == "Position"
-    assert cfg.statuses.fallback == ["Sent", "Draft"] and cfg.statuses.applied == "Sent"
-    assert cfg.statuses.not_applied == "Draft"
-    assert any("no_response" in c for c in g.checks) and "# CHECK" in text
+    assert cfg.statuses.fallback[:2] == ["Sent", "Draft"] and cfg.statuses.applied == "Sent"
+    assert {"Rejected", "No response", "Interview"} <= set(cfg.statuses.fallback)   # padded: no dropdown
+    assert cfg.statuses.not_applied == "Draft" and cfg.statuses.no_response == "No response"
+    assert any("added" in c for c in g.checks) and "# CHECK" in text
     assert "# salary = \"Salary\"" in text
     assert Tracker(path, config=cfg).summary()["applied"] == 1
 
@@ -131,10 +132,10 @@ def test_funnel_on_my_layout(tmp_path):
 def test_cli(tmp_path):
     book = make_tracker(tmp_path / "t.xlsx")
     run = lambda *a: subprocess.run([sys.executable, "-m", "tracker_mcp.server", *a],  # noqa: E731
-                                    capture_output=True, text=True)
+                                    capture_output=True, text=True, encoding="utf-8")
     out = run("init", str(book))
     assert out.returncode == 0, out.stderr
-    assert "Компания" in out.stdout and "Next:" in out.stdout
+    assert "Компания" in out.stdout and "Next, check the mapping:  tracker-mcp --check --tracker" in out.stdout
     again = run("init", str(book))
     assert again.returncode == 2 and "already exists" in again.stderr
     assert "header_row = 5" in run("init", str(book), "--print").stdout
@@ -207,7 +208,9 @@ def test_checkbox_applied_column(tmp_path):
 def test_status_column_without_dropdown_or_values(tmp_path):
     book = _book(tmp_path / "e.xlsx", ["Company", "Role", "Status"], [["Acme", "EM", None]])
     _, g, text = init(book)
-    assert "fallback =" not in text and any("default English statuses" in c for c in g.checks)
+    assert any("default English statuses" in c for c in g.checks)
+    assert load_config(book).statuses.fallback == ["Not applied", "Applied", "Screening", "Interview", "Offer",
+                                                    "Rejected", "Withdrawn", "No response"]
     t = Tracker(book, config=load_config(book), today=lambda: TODAY)
     assert t.set_status(2, "Interview", dry_run=True)["changes"]
 
@@ -243,7 +246,7 @@ def test_reached_column_with_its_own_words(tmp_path):
 def test_writes_refused_when_a_save_would_drop_parts_of_the_file(tmp_path, monkeypatch):
     import warnings
 
-    import tracker_mcp.tracker as tr
+    import tracker_mcp.stores as tr
     real = tr.openpyxl.load_workbook
 
     def load(*a, **kw):
@@ -261,9 +264,9 @@ def test_writes_refused_when_a_save_would_drop_parts_of_the_file(tmp_path, monke
 def test_cli_errors_are_messages_not_tracebacks(tmp_path):
     book = make_tracker(tmp_path / "t.xlsx")
     run = lambda *a: subprocess.run([sys.executable, "-m", "tracker_mcp.server", *a],  # noqa: E731
-                                    capture_output=True, text=True)
+                                    capture_output=True, text=True, encoding="utf-8")
     for args, msg in ((("init", str(book), "--sheet", "Nope"), "No sheet"),
                       (("new", str(tmp_path / "missing" / "x.xlsx")), "No such folder"),
-                      (("init", str(tmp_path / "none.xlsx")), "No such workbook")):
+                      (("init", str(tmp_path / "none.xlsx")), "No such tracker")):
         out = run(*args)
         assert out.returncode == 2 and msg in out.stderr and "Traceback" not in out.stderr

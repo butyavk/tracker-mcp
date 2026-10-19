@@ -1,14 +1,16 @@
-"""Read and safely write a job-application tracker kept in an .xlsx file.
+"""Read and safely write a job-application tracker: .xlsx, .csv or Google Sheets.
 
-The workbook stays the source of truth: I open it in Excel, and other scripts
-edit it too. So the server never caches it. Every call re-reads the file, and
-every write goes through `Tracker._write`, which:
+The tracker stays the source of truth: people open it in Excel or in the browser,
+and other scripts edit it too. So the server never caches it. Every call re-reads
+it through its store (stores.py, gsheets.py), and every write goes through
+`Tracker._write`, which:
 
 1. refuses while the file is open in Excel or LibreOffice (lock file present);
-2. refuses if the file changed since the caller last read it: `expected_version`
-   works like an HTTP If-Match, the version is a hash of the file's bytes;
-3. saves to a temp file, re-opens it and checks every intended cell;
-4. backs up the current file, then swaps the new one in with an atomic rename;
+2. refuses if the tracker changed since the caller last read it: `expected_version`
+   works like an HTTP If-Match, the version is a hash of the content;
+3. writes, re-reads and checks every intended cell (a file: in a temp copy, before
+   it replaces the original);
+4. keeps a backup, so `undo_last_write` can put the old state back;
 5. appends an audit record (field, old -> new, backup name).
 
 Which sheet, which columns, which status words and which follow-up rule: all of
@@ -18,45 +20,34 @@ not by letter, so inserting a column in Excel does not break the server.
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import re
-import shutil
-import warnings
 from collections import Counter
 from collections.abc import Callable
 from copy import copy
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from io import BytesIO
 from pathlib import Path
 from typing import Any
 
-import openpyxl
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook.workbook import Workbook
 from openpyxl.worksheet.cell_range import MultiCellRange
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .config import Config
+from .stores import ConflictError, Store, TrackerError, open_store
+
+__all__ = ["ConflictError", "Tracker", "TrackerError", "dropdown_values", "parse_date"]
 
 EXCEL_EPOCH = date(1899, 12, 30)
-KEEP_BACKUPS = 200
-
-
-class TrackerError(Exception):
-    """A request the tracker cannot apply; the message says why."""
-
-
-class ConflictError(TrackerError):
-    """The file changed (or is open) under us; re-read and retry."""
 
 
 # ---------------------------------------------------------------- values
 
-def parse_date(value: Any) -> date | None:
-    """Dates in a hand-kept sheet are mixed: datetimes, ISO strings, Excel serials."""
+def parse_date(value: Any, formats: tuple[str, ...] | list[str] = ()) -> date | None:
+    """Dates in a hand-kept sheet are mixed: datetimes, ISO strings, Excel serials,
+    dd.mm.yyyy, and whatever `formats` (strptime patterns from the config) add."""
     if value is None:
         return None
     if isinstance(value, datetime):
@@ -77,12 +68,20 @@ def parse_date(value: Any) -> date | None:
                 return date(y, mo, d)
         except ValueError:
             return None
+        for fmt in formats:
+            try:
+                return datetime.strptime(s, fmt).date()
+            except ValueError:
+                continue
     return None
 
 
 def dropdown_values(ws: Worksheet, col: int) -> list[str] | None:
     """The list a column's dropdown offers: inline ("A,B,C"), a cell range
     (Lists!$A$1:$A$9) or a defined name pointing to one. None if there is none."""
+    lists = getattr(ws, "tracker_dropdowns", None)   # set by the Google Sheets store
+    if lists and lists.get(col):
+        return [s.strip() for s in lists[col] if str(s).strip()]
     for dv in ws.data_validations.dataValidation:
         if dv.type != "list" or not dv.formula1 or not any(
                 rng.min_col <= col <= rng.max_col for rng in dv.sqref.ranges):
@@ -107,10 +106,6 @@ def dropdown_values(ws: Worksheet, col: int) -> list[str] | None:
 
 def weekday_or_monday(d: date) -> date:
     return d + timedelta(days=(7 - d.weekday()) % 7) if d.weekday() >= 5 else d
-
-
-def _hash(data: bytes) -> str:
-    return hashlib.sha256(data).hexdigest()[:16]
 
 
 @dataclass
@@ -138,12 +133,12 @@ class Layout:
 # ---------------------------------------------------------------- tracker
 
 class Tracker:
-    def __init__(self, path: str | Path, *, config: Config, backup_dir: str | Path | None = None,
-                 today: Callable[[], date] = date.today):
-        self.path = Path(path).expanduser()
+    def __init__(self, target: str | Path, *, config: Config, backup_dir: str | Path | None = None,
+                 today: Callable[[], date] = date.today, store: Store | None = None):
+        self.store = store or open_store(target, backup_dir)
+        self.path: Path | None = getattr(self.store, "path", None)
+        self.backup_dir = self.store.backup_dir
         self.cfg = config
-        self.backup_dir = (Path(backup_dir).expanduser() if backup_dir
-                           else self.path.parent / "backups-tracker-mcp")
         self.today = today
         self.lossy: list[str] = []   # set by each load, see _load
         st = config.statuses
@@ -160,10 +155,13 @@ class Tracker:
 
     # ---- values
 
+    def _date(self, value: Any) -> date | None:
+        return parse_date(value, self.cfg.values.date_formats)
+
     def _show(self, value: Any, key: str = "") -> Any:
         """Cell value -> JSON-friendly value."""
         if key in self.cfg.date_columns:
-            d = parse_date(value)
+            d = self._date(value)
             if d:
                 return d.isoformat()
         if isinstance(value, (datetime, date)):
@@ -222,7 +220,7 @@ class Tracker:
     # ---- reading
 
     def version(self) -> str:
-        return _hash(self.path.read_bytes())
+        return self.store.version()
 
     def _layout(self, ws: Worksheet) -> Layout:
         cfg = self.cfg
@@ -247,21 +245,18 @@ class Tracker:
                 last_row = r
         return Layout(header_row, cols, headers, last_row)
 
-    def _load(self) -> tuple[Workbook, Worksheet, Layout, str]:
-        """Read the file once: the workbook and its version come from the same bytes."""
-        if not self.path.exists():
-            raise TrackerError(f"Tracker file not found: {self.path}")
-        data = self.path.read_bytes()
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            wb = openpyxl.load_workbook(BytesIO(data))
-        # Parts of the file openpyxl cannot keep (e.g. dropdowns that newer Excel stores
-        # in an extension): a save would silently drop them, so writes are refused.
-        self.lossy = sorted({str(w.message) for w in caught if "will be removed" in str(w.message)})
+    def _sheet(self, wb: Workbook) -> Worksheet:
+        if self.store.single_sheet:
+            return wb.worksheets[0]
         if self.cfg.sheet not in wb.sheetnames:
-            raise TrackerError(f"Sheet «{self.cfg.sheet}» not found")
-        ws = wb[self.cfg.sheet]
-        return wb, ws, self._layout(ws), _hash(data)
+            raise TrackerError(f"Sheet «{self.cfg.sheet}» not found. Sheets: {', '.join(wb.sheetnames)}")
+        return wb[self.cfg.sheet]
+
+    def _load(self) -> tuple[Workbook, Worksheet, Layout, str]:
+        """Read once: the workbook and its version come from the same read."""
+        wb, version, self.lossy = self.store.load()
+        ws = self._sheet(wb)
+        return wb, ws, self._layout(ws), version
 
     def _record(self, ws: Worksheet, lay: Layout, r: int, full: bool = False) -> dict[str, Any]:
         rec: dict[str, Any] = {"row": r}
@@ -275,9 +270,9 @@ class Tracker:
                 rec["other"] = other
         return rec
 
-    def records(self) -> tuple[list[dict[str, Any]], str]:
+    def records(self, full: bool = False) -> tuple[list[dict[str, Any]], str]:
         _, ws, lay, version = self._load()
-        recs = [self._record(ws, lay, r) for r in lay.rows()
+        recs = [self._record(ws, lay, r, full) for r in lay.rows()
                 if ws.cell(r, lay.cols["company"]).value not in (None, "")]
         return recs, version
 
@@ -292,17 +287,33 @@ class Tracker:
         keys = ("row", "num", "company", "role", "status", "applied_on", "followup_on")
         return {k: rec[k] for k in keys if rec.get(k) not in (None, "")}
 
+    def unavailable(self) -> dict[str, str]:
+        """Tools that cannot work on this layout, and the column each one misses."""
+        need = {"followups_due": ["followup_on"], "log_followup": ["followup_on", "followup_log"],
+                "stale_applications": ["applied_on"], "close_stale": ["applied_on"]}
+        out = {}
+        for tool, fields in need.items():
+            missing = [f for f in fields if not self.cfg.has(f)]
+            if missing:
+                out[tool] = f"needs the {', '.join(missing)} column (add it to [columns] in the config)"
+        return out
+
     def describe(self) -> dict[str, Any]:
-        """How the server reads this workbook: columns, statuses, follow-up rule."""
+        """How the server reads this tracker: columns, statuses, follow-up rule."""
         _, ws, lay, version = self._load()
         st, fu = self.cfg.statuses, self.cfg.followups
-        return {
-            "file": str(self.path),
-            "sheet": self.cfg.sheet,
+        mapped = set(lay.cols.values())
+        out = {
+            "tracker": self.store.label,
+            "kind": self.store.kind,
+            "sheet": ws.title,
             "header_row": lay.header_row,
-            "data_rows": f"{lay.header_row + 1}–{lay.last_row}",
+            "data_rows": f"{lay.header_row + 1}–{lay.last_row}" if lay.last_row > lay.header_row else "none yet",
             "columns": {k: f"{get_column_letter(c)}: {lay.headers[c]}" for k, c in lay.cols.items()},
             "custom_fields": self.cfg.custom_fields(),
+            # Not in the config: shown in get_application under "other"; usable by exact
+            # header text in add_application(extra=...) and funnel(by=...).
+            "other_headers": [h for c, h in lay.headers.items() if c not in mapped],
             "statuses_allowed": self._allowed_statuses(ws, lay),
             "status_not_applied": st.not_applied,
             "status_applied": st.applied,
@@ -311,15 +322,29 @@ class Tracker:
             "funnel_stages": st.stages,
             "followups": {"first_after_days": fu.first_after_days, "next_after_days": fu.next_after_days,
                           "weekend_to_monday": fu.weekend_to_monday},
+            **({"date_formats": self.cfg.values.date_formats} if self.cfg.values.date_formats else {}),
+            **({"unavailable_tools": u} if (u := self.unavailable()) else {}),
             **({"writes_blocked": self.lossy} if self.lossy else {}),
             "version": version,
         }
+        return out
 
     def list_applications(self, status: str | None = None, query: str | None = None,
                           applied_since: date | None = None, applied_until: date | None = None,
                           open_only: bool = False, limit: int = 100) -> dict[str, Any]:
         recs, version = self.records()
-        wanted = {s.strip().casefold() for s in status.split(",")} if status else None
+        wanted = None
+        if status:
+            _, ws, lay, _ = self._load()
+            known = {s.casefold(): s for s in self._allowed_statuses(ws, lay)}
+            known.update({(r["status"] or "").casefold(): r["status"] for r in recs if r["status"]})
+            wanted = set()
+            for s in status.split(","):
+                s = s.strip().casefold()
+                s = self.aliases.get(s, s).casefold()
+                if s not in known:
+                    raise TrackerError(f"Unknown status «{s}». Statuses in this tracker: {', '.join(known.values())}")
+                wanted.add(s)
         q = query.casefold() if query else None
         out = []
         for rec in recs:
@@ -331,7 +356,7 @@ class Tracker:
             if q and q not in f"{rec['company']} {rec['role']}".casefold():
                 continue
             if applied_since or applied_until:
-                d = parse_date(rec.get("applied_on"))
+                d = self._date(rec.get("applied_on"))
                 if (not self._is_applied(rec) or d is None
                         or (applied_since and d < applied_since)
                         or (applied_until and d > applied_until)):
@@ -364,7 +389,7 @@ class Tracker:
         for rec in recs:
             if rec["status"] in self.closed or rec["status"] == self.cfg.statuses.not_applied:
                 continue
-            d = parse_date(rec["followup_on"])
+            d = self._date(rec["followup_on"])
             if d is None:
                 if self._is_applied(rec) and not rec["followup_on"]:
                     undated.append(self._brief(rec))
@@ -384,7 +409,7 @@ class Tracker:
         months = Counter()
         undated = 0
         for r in applied:
-            d = parse_date(r.get("applied_on"))
+            d = self._date(r.get("applied_on"))
             if d:
                 months[d.strftime("%Y-%m")] += 1
             else:
@@ -399,7 +424,7 @@ class Tracker:
             "version": version,
         }
         if since or until:
-            cohort = [r for r in applied if (d := parse_date(r.get("applied_on")))
+            cohort = [r for r in applied if (d := self._date(r.get("applied_on")))
                       and (not since or d >= since) and (not until or d <= until)]
             out["period"] = {
                 "since": since.isoformat() if since else None,
@@ -421,7 +446,7 @@ class Tracker:
 
     def _group(self, rec: dict[str, Any], by: str) -> str:
         if by == "month":
-            d = parse_date(rec.get("applied_on"))
+            d = self._date(rec.get("applied_on"))
             return d.strftime("%Y-%m") if d else "(no date)"
         text = str(rec.get(by) or "").strip()
         if not text:
@@ -439,18 +464,28 @@ class Tracker:
         """Applied -> replied -> each configured stage, in total and per group."""
         if by is None:  # the channel if the tracker has one, else the month
             by = "channel" if self.cfg.has("channel") else "month" if self.cfg.has("applied_on") else "status"
+        other = False
         if by != "month" and not self.cfg.has(by):
-            options = ["month", *[f for f in self.cfg.columns if f not in ("company", "role", "num")]]
-            raise TrackerError(f"Cannot group by «{by}»: not a column in the config. Options: {', '.join(options)}")
+            _, _, lay, _ = self._load()
+            mapped = set(lay.cols.values())
+            headers = [h for c, h in lay.headers.items() if c not in mapped]
+            if by not in headers:
+                options = ["month", *[f for f in self.cfg.columns if f not in ("company", "role", "num", "link",
+                                                                                 "notes", "followup_log")], *headers]
+                raise TrackerError(f"Cannot group by «{by}». Options: {', '.join(options)}")
+            other = True
         if by == "month" or since or until:
             self._need("applied_on")
-        recs, version = self.records()
+        recs, version = self.records(full=other)
+        if other:
+            for r in recs:
+                r[by] = r.get("other", {}).get(by)
         applied = [r for r in recs if self._is_applied(r)]
         skipped = 0
         if since or until:
             kept = []
             for r in applied:
-                d = parse_date(r.get("applied_on"))
+                d = self._date(r.get("applied_on"))
                 if d and (not since or d >= since) and (not until or d <= until):
                     kept.append(r)
                 elif d is None:
@@ -507,8 +542,8 @@ class Tracker:
             if ws.cell(r, lay.cols["company"]).value in (None, ""):
                 continue
             rec = self._record(ws, lay, r)
-            applied = parse_date(rec.get("applied_on"))
-            fu = parse_date(rec.get("followup_on"))
+            applied = self._date(rec.get("applied_on"))
+            fu = self._date(rec.get("followup_on"))
             if (rec["status"] in self.waiting and self._is_applied(rec) and applied
                     and (today - applied).days >= days and not (fu and fu >= today)):
                 log = rec.get("followup_log") or ""
@@ -656,7 +691,7 @@ class Tracker:
                     self._set(ws, lay, row, key,
                               self._append(ws.cell(row, lay.cols[key]).value, self._stamp(text)), changes)
             if cfg.has("followup_on"):
-                fu = parse_date(ws.cell(row, lay.cols["followup_on"]).value)
+                fu = self._date(ws.cell(row, lay.cols["followup_on"]).value)
                 if st in self.closed and fu and fu >= self.today():
                     self._set(ws, lay, row, "followup_on", cfg.values.no_date, changes)
                     self._log(ws, lay, row,
@@ -694,28 +729,22 @@ class Tracker:
             raise TrackerError("The last write is already undone")
         current = self.version()
         if current != entry["version_after"] or (expected_version and expected_version != current):
-            raise ConflictError("The file changed after that write; undo would lose those changes. "
+            raise ConflictError("The tracker changed after that write; undo would lose those changes. "
                                 f"Restore by hand from {entry['backup']} if needed.")
         if dry_run:
             return {"dry_run": True, "would_undo": entry, "version": current}
-        self._refuse_if_open()
-        backup = self.backup_dir / entry["backup"]
-        safety = self._backup()
-        tmp = self.path.with_name(f".{self.path.stem}.tracker-mcp-tmp.xlsx")
-        shutil.copy2(backup, tmp)
-        os.replace(tmp, self.path)
-        after = self.version()
+        safety, after = self.store.restore(entry["backup"])
         self._audit({"tool": "undo_last_write", "undid": entry["at"], "row": entry["row"],
-                     "changes": [], "backup": safety.name,
+                     "changes": [], "backup": safety,
                      "version_before": current, "version_after": after})
-        return {"undone": entry, "backup_of_state_before_undo": str(safety), "version": after}
+        return {"undone": entry, "backup_of_state_before_undo": str(self.backup_dir / safety), "version": after}
 
     # ---- writing: the safe path
 
     def _write(self, tool: str, mutate: Callable[[Workbook, Worksheet, Layout], tuple],
                expected_version: str | None, dry_run: bool) -> dict[str, Any]:
         if not dry_run:
-            self._refuse_if_open()
+            self.store.check_writable()
         wb, ws, lay, before = self._load()
         if self.lossy and not dry_run:
             raise TrackerError("Writes are off for this workbook: openpyxl, which the server writes with, "
@@ -739,51 +768,26 @@ class Tracker:
                 result["note"] = "Nothing to change"
             return result
 
-        wb.calculation.fullCalcOnLoad = True  # Excel recomputes formulas on open
-        tmp = self.path.with_name(f".{self.path.stem}.tracker-mcp-tmp.xlsx")
-        try:
-            wb.save(tmp)
-            self._verify(tmp, changes)
-            if self.version() != before:  # someone saved while we worked
-                raise ConflictError("The tracker changed while writing; nothing was saved. Retry.")
-            backup = self._backup()
-            shutil.copymode(self.path, tmp)
-            os.replace(tmp, self.path)
-        finally:
-            tmp.unlink(missing_ok=True)
-        after = self.version()
+        backup, after = self.store.save(wb, before, lambda saved: self._verify(saved, changes))
         self._audit({"tool": tool, "row": row, "changes": result["changes"],
-                     "layout": layout_notes, "backup": backup.name,
+                     "layout": layout_notes, "backup": backup,
                      "version_before": before, "version_after": after})
-        result.update(backup=str(backup), version=after)
+        result.update(backup=str(self.backup_dir / backup), version=after)
         return result
 
-    def _refuse_if_open(self) -> None:
-        for lock in (f"~${self.path.name}", f".~lock.{self.path.name}#"):
-            if (self.path.parent / lock).exists():
-                raise ConflictError(f"The tracker is open in Excel/LibreOffice (lock file {lock}). "
-                                    "Close it and retry; if it is closed, the lock file is stale.")
-
-    def _verify(self, saved: Path, changes: list[Change]) -> None:
-        ws = openpyxl.load_workbook(saved)[self.cfg.sheet]
+    def _verify(self, saved: Workbook, changes: list[Change]) -> None:
+        ws = self._sheet(saved)
         lay = self._layout(ws)
         for ch in changes:
             col = lay.cols[ch.field] if ch.field in lay.cols else self._column_of(lay, ch.field)
             got = ws.cell(ch.row, col).value
-            ok = (parse_date(got) == ch.new) if isinstance(ch.new, date) else (got == ch.new)
+            if isinstance(ch.new, date):
+                ok = self._date(got) == ch.new
+            else:  # a CSV gives everything back as text
+                ok = got == ch.new or (got is not None and str(got) == str(ch.new))
             if not ok:
                 raise TrackerError(f"Verification failed for row {ch.row} {ch.field}: "
                                    f"wrote {ch.new!r}, read back {got!r}. Nothing was saved.")
-
-    def _backup(self) -> Path:
-        self.backup_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        dst = self.backup_dir / f"{self.path.stem}.{stamp}{self.path.suffix}"
-        shutil.copy2(self.path, dst)
-        old = sorted(self.backup_dir.glob(f"{self.path.stem}.*{self.path.suffix}"))
-        for p in old[:-KEEP_BACKUPS]:
-            p.unlink()
-        return dst
 
     def _audit(self, entry: dict[str, Any]) -> None:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
@@ -815,34 +819,54 @@ class Tracker:
     def _set_cell(self, cell, row: int, key: str, new: Any, changes: list[Change]) -> None:
         old = cell.value
         if isinstance(new, date):
-            if parse_date(old) == new and isinstance(old, datetime):
+            if self._date(old) == new and isinstance(old, datetime):
                 return
             cell.value = datetime(new.year, new.month, new.day)
             cell.number_format = "yyyy-mm-dd"
         else:
+            new = self._as_text(new)
             if old == new:
                 return
             cell.value = new
+            if isinstance(new, str) and new.startswith("="):
+                cell.data_type = "s"   # text from the model stays text, never a formula
         changes.append(Change(row, key, self._show(old, key), new))
+
+    def _as_text(self, value: Any) -> Any:
+        """A CSV file has no cell types: Excel runs anything that looks like a formula
+        when it opens one. Text the server writes there gets a leading apostrophe if
+        it starts like a formula ("=", "+", "@", or "-" followed by more than a space)."""
+        if (self.store.kind == "csv" and isinstance(value, str) and value[:1] in ("=", "+", "@", "-")
+                and not (value[:1] == "-" and value[1:2] in ("", " "))):
+            return "'" + value
+        return value
 
     @staticmethod
     def _column_of(lay: Layout, header: str) -> int:
         return next(c for c, h in lay.headers.items() if h == header)
 
-    def _resolve_extra(self, lay: Layout, extra: dict[str, str]) -> dict[int, str]:
-        """add_application's `extra`: keys are config field names or header texts."""
-        out = {}
-        reserved = {"num", "company", "role", "status", "applied"}
+    def _resolve_extra(self, lay: Layout, extra: dict[str, str]) -> dict[int, Any]:
+        """add_application's `extra`: keys are config field names or header texts.
+        Columns the server manages are refused whichever way they are named, and
+        values for date columns must be dates."""
+        out: dict[int, Any] = {}
+        reserved = {"num", "company", "role", "status", "applied", "applied_on", "reached",
+                    "followup_on", "followup_log"}
+        by_col = {c: k for k, c in lay.cols.items()}
         for key, val in extra.items():
-            if key in reserved:
-                raise TrackerError(f"«{key}» is set by the server, not through extra")
-            if key in lay.cols:
-                col = lay.cols[key]
-            else:
-                col = next((c for c, h in lay.headers.items() if h == key), None)
-                if col is None:
-                    raise TrackerError(f"Unknown column «{key}». Use a field from describe_tracker "
-                                       "or an exact header text.")
+            col = lay.cols.get(key) or next((c for c, h in lay.headers.items() if h == key), None)
+            if col is None:
+                raise TrackerError(f"Unknown column «{key}». Use a field from describe_tracker "
+                                   "or an exact header text.")
+            field = by_col.get(col, key)
+            if field in reserved:
+                raise TrackerError(f"«{key}» is set by the server ({field}): use add_application's own "
+                                   "arguments, then mark_applied, set_status or log_followup.")
+            if field in self.cfg.date_columns:
+                d = self._date(val)
+                if d is None:
+                    raise TrackerError(f"«{val}» is not a date for «{key}»; use yyyy-mm-dd.")
+                val = d
             out[col] = val
         return out
 
@@ -860,8 +884,10 @@ class Tracker:
         alias = self.aliases.get(v.casefold())
         if alias in allowed:
             return alias
-        raise TrackerError(f"Unknown status «{value}». Allowed (the dropdown in column "
-                           f"{get_column_letter(lay.cols['status'])}): {', '.join(allowed)}")
+        where = (f"the dropdown in column {get_column_letter(lay.cols['status'])}"
+                 if dropdown_values(ws, lay.cols["status"])
+                 else "the config's statuses.fallback; the column has no dropdown")
+        raise TrackerError(f"Unknown status «{value}». Allowed ({where}): {', '.join(allowed)}")
 
     def _allowed_statuses(self, ws: Worksheet, lay: Layout) -> list[str]:
         return dropdown_values(ws, lay.cols["status"]) or list(self.cfg.statuses.fallback)

@@ -1,21 +1,38 @@
 [project]
 name = "tracker-mcp"
-version = "0.2.0"
-description = "MCP server over a job-application tracker kept in an Excel file, with safe writes"
+version = "0.3.0"
+description = "MCP server for your job-application tracker in Excel, CSV or Google Sheets: follow-ups, funnel, safe confirmed writes"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "Ivan Rykov" }]
-keywords = ["mcp", "model-context-protocol", "claude", "excel", "job-search"]
+keywords = ["mcp", "model-context-protocol", "claude", "job-search", "job-tracker", "excel", "google-sheets", "csv"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business",
+    "Topic :: Office/Business :: Financial :: Spreadsheet",
+]
 requires-python = ">=3.11"
 dependencies = [
     "mcp>=2.3,<3",
     "openpyxl>=3.1",
     "pydantic>=2.7",
+    "pyjwt[crypto]>=2.8",
 ]
 
 [project.urls]
+Homepage = "https://github.com/butyavk/tracker-mcp"
 Repository = "https://github.com/butyavk/tracker-mcp"
+Issues = "https://github.com/butyavk/tracker-mcp/issues"
+Changelog = "https://github.com/butyavk/tracker-mcp/blob/main/CHANGELOG.md"
 
 [project.scripts]
 tracker-mcp = "tracker_mcp.server:main"
@@ -29,6 +46,12 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tracker_mcp"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"examples/tracker-mcp.example.toml" = "tracker_mcp/example.tracker-mcp.toml"
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "examples", "README.md", "LICENSE", "CHANGELOG.md", "server.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
