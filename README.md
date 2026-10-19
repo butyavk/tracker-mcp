@@ -43,13 +43,17 @@ program that applies them.
 | Dropdowns and formulas on new rows | Depends on the code written for that change | Extended to new rows, every time |
 | Excel has the file open, or it changed meanwhile | Checked if the model thinks of it | The write is refused |
 | Text pasted from job posts and e-mails | Text starting with "=" becomes a formula unless the code prevents it | Always written as text |
+| What earlier edits left behind (text dates, rows without a status) | Found if you ask, fixed by code written for it | `check_tracker` finds it, `fix_tracker` fixes it in one confirmed write |
+| When each reply came | Known only if someone wrote it down | Recorded on every reply; `reply_times` shows when replies stop coming |
+| Replies in your mailbox | The model reads them and decides which row each is about | `match_emails` names the row and the change, the same way every time |
 | Each request | Write, run and check a script | One tool call |
 | Free-form analysis, charts, reshaping the sheet | Anything | Not its job: Claude still does that alongside |
 | Where | Where Claude can run code on your files, or on a copy you upload | Any MCP client: Claude Desktop (in a normal chat), Claude Code, Cursor, ...; not in a browser or on a phone |
 
-So tracker-mcp does not give Claude new abilities. It gives the everyday part of a job
-search (record what happened, see what is due, see what works) fixed rules and fixed
-safety, with no instructions to write:
+So tracker-mcp mostly does not give Claude new abilities. It gives the everyday part
+of a job search (record what happened, see what is due, see what works) fixed rules and
+fixed safety, with no instructions to write. The one thing Claude cannot do later is
+know when a reply came if nobody wrote it down; the server writes it down as it happens.
 
 - **Rules belong in code, not in a prompt.** "Which follow-ups are due?" is date
   arithmetic with your rule: 10 days after applying, then every 14, weekends moved to
@@ -226,22 +230,54 @@ server's environment. The server can then reach only the sheets you share with i
 | `list_applications` | read | Filter by status, company/role text, submit dates |
 | `get_application` | read | Every column of one application (by text or row) |
 | `followups_due` | read | Follow-ups due within N days, overdue first; submitted rows with no follow-up date |
-| `stale_applications` | read | Still waiting, submitted N+ days ago, no follow-up planned |
+| `stale_applications` | read | Still waiting, silent N+ days since the last touch (the submit date or the newest dated follow-up log entry), no follow-up planned |
 | `summary` | read | Counts by status and month; a cohort for a date range |
 | `funnel` | read | Submitted → replied → screening → interview → offer, in total and by channel, source, month or any column |
+| `check_tracker` | read | What hand edits left behind: dates kept as text, rows without a status, statuses not in the dropdown, weekend follow-ups, closed rows with a planned follow-up, the furthest stage behind the status, replies without a date, duplicates |
+| `reply_times` | read | Days from submitting to the first reply (median, 75th percentile), in total and by group, and how many silent applications still got a reply after 7, 14, 21, 30, 45, 60 days |
+| `match_emails` | read | Which application each e-mail is about (confirmation, rejection, interview, offer) and the write that would record it |
 | `recent_writes` | read | Audit log of the server's writes |
 | `add_application` | write | New row with the not-applied status; other columns via `extra`; refuses duplicates |
 | `mark_applied` | write | Submitted: date, channel, status, follow-up date by your rule |
-| `set_status` | write | New status from your dropdown; a closed status cancels the pending follow-up |
+| `set_status` | write | New status from your dropdown; a closed status cancels the pending follow-up; the first reply fills the reply date (`on`, default today) |
 | `log_followup` | write | Log a sent follow-up, schedule the next one or close |
 | `reschedule_followup` | write | Move the next follow-up, or plan none, when nothing was sent (no contact yet, waiting for credits) |
 | `close_stale` | write | Close stale applications (or chosen rows) in one write, one backup, one undo step |
+| `fix_tracker` | write | Fix what `check_tracker` can fix, in one write, one backup, one undo step |
+| `export_followups_calendar` | file | The open follow-ups as an `.ics` file next to the tracker (the tracker is not touched) |
 | `undo_last_write` | write | Restore the state before the last write, if nothing changed since |
 
-Two prompts, for clients that show MCP prompts: **Weekly review** goes through
-follow-ups, stale applications, the funnel and this week's submissions, and ends
-with a plan; **Draft a follow-up** writes a short message for one row. Two
-resources: `tracker://layout` and `tracker://application/{row}`.
+Three prompts, for clients that show MCP prompts: **Weekly review** checks the
+tracker and goes through follow-ups, stale applications, reply times, the funnel and
+this week's submissions, and ends with a plan; **Update the tracker from my e-mail**
+has the client's own mail tool find replies from companies, matches them with
+`match_emails` and proposes the changes; **Draft a follow-up** writes a short message
+for one row. Two resources: `tracker://layout` and `tracker://application/{row}`.
+
+`add_application` and `mark_applied` warn when the same company already has an
+application submitted within 28 days (`[rules] same_company_days`); the warning shows
+in the preview and does not stop the write.
+
+### Reply dates and when to stop waiting
+
+Give the tracker a reply-date column (`Replied on`, `Дата ответа`; the `new` template
+has one) and `set_status` fills it on the first reply: a rejection or any funnel
+stage, with `on=` for the e-mail's date. `check_tracker` fills past ones from the
+Response column (the earliest date there that is not about the application being
+received) for you to approve. Then `reply_times` says how long your replies take per
+channel, and after how many silent days they stopped coming: the point where closing
+an application costs nothing. Without the column, it uses only the replies recorded
+through the server.
+
+### Follow-ups in your calendar
+
+`tracker-mcp calendar --tracker ~/Documents/job-tracker.xlsx` (or the
+`export_followups_calendar` tool) writes the open follow-ups as an `.ics` file next to
+the tracker: one all-day event each, overdue ones on today, with the contact and the
+last log line. Open the file to import it into Calendar, Outlook or Google Calendar.
+It is a snapshot: after the dates change, export and import again (each event keeps
+its ID; importing into a calendar of its own makes an old copy easy to clear). If your
+client has a calendar tool, it can put the follow-ups there directly.
 
 Read tools are marked read-only. Writes are marked destructive where they
 overwrite cells, and all of them take `dry_run`, `expected_version` and `confirm`.

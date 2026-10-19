@@ -1,6 +1,35 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-10-19
+
+What a hand-kept tracker cannot do by itself: find its own drift, remember when each
+reply came, and read the mailbox for you.
+
+Added
+- `check_tracker` and `fix_tracker`: dates kept as text or bare numbers, rows without a
+  status, statuses spelled unlike the dropdown, follow-ups on a weekend or on closed
+  applications, waiting rows with no follow-up date, the applied column disagreeing with
+  the status, the furthest stage behind the status, replies without a reply date,
+  duplicates. The fixable ones are fixed in one confirmed write, one backup, one undo.
+- A reply-date column (`replied_on`; "Replied on" in the `new` template, found by `init`
+  as "Reply date", "Дата ответа" and the like). `set_status` fills it on the first reply,
+  with `on=` for the day the reply came; `check_tracker` proposes past dates from the
+  Response column.
+- `reply_times`: days from submitting to the first reply, in total and per channel,
+  source or month, and how many silent applications still got a reply after 7 to 60 days.
+- `match_emails` and the **Update the tracker from my e-mail** prompt: the client's mail
+  tool finds the messages, the server names the application and the change (a
+  confirmation, a rejection, an interview, an offer) with the e-mail's date.
+- `export_followups_calendar` and `tracker-mcp calendar`: the open follow-ups as an
+  `.ics` file to import into a calendar.
+- `[rules] same_company_days` (28): adding or submitting to a company that already has
+  an application within that many days shows a warning in the preview.
+
+Changed
+- A waiting application is silent from its last touch: the submit date or the newest
+  dated follow-up log entry, whichever is later (`[rules] silence_from = "applied"` for
+  the old rule). `stale_applications` shows `last_touch` and `days_silent`.
+- The weekly review prompt starts with `check_tracker` and includes `reply_times`.
 
 Fixed
 - On Windows, an undo right after a write could take the same backup name as that

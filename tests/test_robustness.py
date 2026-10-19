@@ -427,3 +427,29 @@ def test_the_built_in_client_comes_from_the_release_build(monkeypatch):
     assert gsheets._builtin_client() is None
     ignored = (Path(__file__).parents[1] / ".gitignore").read_text(encoding="utf-8")
     assert "src/tracker_mcp/_google_client.py" in ignored.splitlines()
+
+
+# ---------------------------------------------------------------- check_tracker on other stores
+
+def test_check_and_fix_a_google_sheet(jobs):
+    jobs.set("Jobs", 3, 4, "2026-09-05")          # a date typed as text
+    jobs.sheets["Jobs"]["cells"].pop((3, 3), None)   # no status
+    init(URL)
+    t = tracker()
+    kinds = {(i["kind"], i["row"]) for i in t.check_tracker()["issues"]}
+    assert {("date_as_text", 3), ("no_status", 3)} <= kinds
+    t.fix_tracker(kinds=["date_as_text", "no_status"])
+    assert jobs.is_date("Jobs", 3, 4) and jobs.value("Jobs", 3, 3) == "Applied"
+    assert not {i["kind"] for i in t.check_tracker()["issues"]} & {"date_as_text", "no_status"}
+
+
+def test_check_a_csv_does_not_call_every_date_text(tmp_path):
+    path = tmp_path / "jobs.csv"
+    path.write_text("Company,Role,Status,Date Applied,Follow-up date\n"
+                    "Acme,EM,Applied,2026-09-01,2026-10-25\nGlobex,EM,,,\n", encoding="utf-8")
+    init(path)
+    t = Tracker(path, config=load_config(path), today=lambda: TODAY)
+    kinds = {i["kind"] for i in t.check_tracker()["issues"]}
+    assert "date_as_text" not in kinds and "no_status" in kinds and "weekend_followup" in kinds
+    t.fix_tracker()
+    assert "2026-10-26" in path.read_text(encoding="utf-8")

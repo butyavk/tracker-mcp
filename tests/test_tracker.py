@@ -5,7 +5,7 @@ import openpyxl
 import pytest
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from tracker_mcp.config import load_config
+from tracker_mcp.config import Rules, load_config
 from tracker_mcp.tracker import ConflictError, Tracker, TrackerError, parse_date
 
 RU_CONFIG = Path(__file__).parent / "fixtures" / "ru.tracker-mcp.toml"
@@ -177,6 +177,23 @@ def test_a_backup_never_overwrites_another_taken_in_the_same_microsecond(t, monk
     assert names == ["tracker.20261019-120000-123456.xlsx", "tracker.20261019-120000-123457.xlsx"]
 
 
+def test_silence_counts_from_the_last_follow_up_in_the_log(tmp_path):
+    """Ivan's rule: 30 days without a reply after the last follow-up, not after submitting."""
+    path = make_tracker(tmp_path / "tracker.xlsx")
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Подачи"]
+    ws["L7"], ws["Q7"] = datetime(2026, 9, 1), "—"
+    ws["S7"] = "01.09: подано | 04.10: InMail-фоллоу-ап отправлен"
+    wb.save(path)
+    t = Tracker(path, config=load_config(path, RU_CONFIG), today=lambda: TODAY)
+    assert t.stale_applications(30)["count"] == 0
+    stale = t.stale_applications(14)["applications"]
+    assert [(a["company"], a["last_touch"], a["days_silent"]) for a in stale] == [("Globex", "2026-10-04", 14)]
+    cfg = load_config(path, RU_CONFIG).model_copy(update={"rules": Rules(silence_from="applied")})
+    old_rule = Tracker(path, config=cfg, today=lambda: TODAY)
+    assert [a["company"] for a in old_rule.stale_applications(30)["applications"]] == ["Globex"]
+
+
 def test_bad_row(t):
     with pytest.raises(TrackerError, match="not an application row"):
         t.set_status(5, "Отказ")
@@ -187,6 +204,7 @@ def test_close_stale_in_one_batch(tmp_path):
     wb = openpyxl.load_workbook(path)
     ws = wb["Подачи"]
     ws["L7"], ws["Q7"] = datetime(2026, 9, 1), datetime(2026, 9, 11)   # Globex: silent since September
+    ws["S7"] = "01.09: подано"
     ws["L9"], ws["O9"], ws["K9"] = "2026-09-02", "Ждём ответа", "Да"     # Umbrella: waiting, no date
     ws["Q10"] = datetime(2026, 10, 25)                                  # Hooli: follow-up still ahead
     wb.save(path)

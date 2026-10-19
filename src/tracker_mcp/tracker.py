@@ -121,6 +121,36 @@ def weekday_or_monday(d: date) -> date:
     return d + timedelta(days=(7 - d.weekday()) % 7) if d.weekday() >= 5 else d
 
 
+def company_key(name: Any) -> str:
+    """A company name for comparing: "Swap (Swap Commerce)", "SWAP Inc." -> "swap"."""
+    s = re.sub(r"\(.*?\)|\[.*?\]", " ", str(name or "")).casefold()
+    s = re.sub(r"\b(inc|llc|ltd|limited|gmbh|corp|corporation|plc|ag|bv|oy|ab|group|holdings?)\b\.?", " ", s)
+    return re.sub(r"[\W_]+", "", s)
+
+
+_LEAD_DATE = re.compile(r"^\W{0,3}(\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}(?:\.\d{2,4})?)(?!\d)")
+_ANY_DATE = re.compile(r"(?<![\d.])(\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}(?:\.\d{4})?)(?![\d])")
+
+
+def date_in_text(token: str, not_after: date, not_before: date | None = None) -> date | None:
+    """A date written in a note: 2026-10-04, 04.10.2026, or 04.10 without a year (the
+    latest such date that is not after `not_after`, and not before `not_before`)."""
+    try:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", token):
+            return date.fromisoformat(token)
+        parts = [int(p) for p in token.split(".")]
+        if len(parts) == 3:
+            y = parts[2] + 2000 if parts[2] < 100 else parts[2]
+            return date(y, parts[1], parts[0])
+        for year in (not_after.year, not_after.year - 1):
+            d = date(year, parts[1], parts[0])
+            if d <= not_after and (not_before is None or d >= not_before):
+                return d
+    except ValueError:
+        return None
+    return None
+
+
 @dataclass
 class Change:
     row: int
@@ -173,7 +203,7 @@ class Tracker:
 
     def _show(self, value: Any, key: str = "") -> Any:
         """Cell value -> JSON-friendly value."""
-        if key in self.cfg.date_columns:
+        if self.cfg.is_date(key):
             d = self._date(value)
             if d:
                 return d.isoformat()
@@ -211,6 +241,10 @@ class Tracker:
         if any(isinstance(ws.cell(r, col).value, bool) for r in lay.rows()):
             return yes
         return self.cfg.values.yes if yes else self.cfg.values.no
+
+    def _is_reply(self, status: Any) -> bool:
+        """A status that means the company answered: a rejection or any funnel stage."""
+        return status in self.rejected or self._stage(status) is not None
 
     def _stage(self, value: Any) -> int | None:
         return self.stage_of.get(str(value).strip().casefold()) if value not in (None, "") else None
@@ -548,8 +582,28 @@ class Tracker:
                                 "applied_without_date": skipped}
         return result
 
+    def _log_dates(self, text: Any, not_before: date | None = None) -> list[date]:
+        """Dates that start entries of a follow-up log ("04.10: InMail sent | 2026-10-18: ...")."""
+        if not text:
+            return []
+        sep = self.cfg.values.separator.strip() or "|"
+        out = []
+        for entry in re.split(rf"{re.escape(sep)}|\n", str(text)):
+            m = _LEAD_DATE.match(entry)
+            if m and (d := date_in_text(m.group(1), self.today(), not_before)):
+                out.append(d)
+        return out
+
+    def _last_touch(self, rec: dict[str, Any]) -> date | None:
+        """The submit date, or the newest dated entry of the follow-up log if later."""
+        applied = self._date(rec.get("applied_on"))
+        if self.cfg.rules.silence_from == "applied":
+            return applied
+        return max([d for d in (applied, *self._log_dates(rec.get("followup_log"), applied)) if d], default=None)
+
     def _stale_rows(self, ws: Worksheet, lay: Layout, days: int) -> list[dict[str, Any]]:
-        """Still waiting, submitted at least `days` ago, and no follow-up planned ahead."""
+        """Still waiting, silent for `days`+ days since the last touch (the submit date or
+        the newest dated follow-up log entry), and no follow-up planned ahead."""
         self._need("applied_on")
         today = self.today()
         out = []
@@ -558,11 +612,13 @@ class Tracker:
                 continue
             rec = self._record(ws, lay, r)
             applied = self._date(rec.get("applied_on"))
+            touch = self._last_touch(rec)
             fu = self._date(rec.get("followup_on"))
-            if (rec["status"] in self.waiting and self._is_applied(rec) and applied
-                    and (today - applied).days >= days and not (fu and fu >= today)):
+            if (rec["status"] in self.waiting and self._is_applied(rec) and applied and touch
+                    and (today - touch).days >= days and not (fu and fu >= today)):
                 log = rec.get("followup_log") or ""
                 out.append({**self._brief(rec), "days_since_applied": (today - applied).days,
+                            "last_touch": touch.isoformat(), "days_silent": (today - touch).days,
                             "last_log": log[-200:] if log else None})
         return out
 
@@ -582,8 +638,8 @@ class Tracker:
             if rows is not None:
                 extra = sorted(set(rows) - set(stale))
                 if extra:
-                    raise TrackerError(f"Rows {extra} are not stale by the rule (waiting status, submitted "
-                                       f"{days}+ days ago, no follow-up planned ahead).")
+                    raise TrackerError(f"Rows {extra} are not stale by the rule (waiting status, silent "
+                                       f"{days}+ days since the last touch, no follow-up planned ahead).")
                 stale = [r for r in stale if r in set(rows)]
             if not stale:
                 return [], [], []
@@ -599,11 +655,56 @@ class Tracker:
 
         return self._write("close_stale", mutate, expected_version, dry_run)
 
+    def check_tracker(self, limit: int = 200) -> dict[str, Any]:
+        from .doctor import check
+        return check(self, limit)
+
+    def fix_tracker(self, kinds: list[str] | None = None, rows: list[int] | None = None, *,
+                    expected_version: str | None = None, dry_run: bool = False) -> dict[str, Any]:
+        from .doctor import fix
+        return fix(self, kinds, rows, expected_version=expected_version, dry_run=dry_run)
+
+    def reply_times(self, by: str | None = None, since: date | None = None) -> dict[str, Any]:
+        from .insights import reply_times
+        return reply_times(self, by, since)
+
+    def followup_events(self, days: int = 60) -> dict[str, Any]:
+        from .insights import followup_events
+        events, version = followup_events(self, days)
+        return {"events": events, "count": len(events), "version": version}
+
+    def export_calendar(self, path: str | Path | None = None, days: int = 60) -> dict[str, Any]:
+        from .insights import export_calendar
+        return export_calendar(self, path, days)
+
+    def match_emails(self, messages: list[dict[str, Any]]) -> dict[str, Any]:
+        from .mail import match
+        return match(self, messages)
+
     def recent_writes(self, limit: int = 10) -> dict[str, Any]:
         entries = self._audit_entries()
         return {"writes": entries[-limit:][::-1]}
 
     # ---- writing: the tools
+
+    def _company_warnings(self, ws: Worksheet, lay: Layout, company: str, day: date,
+                          exclude: int | None = None) -> list[str]:
+        """Other submissions to the same company within rules.same_company_days of `day`."""
+        n = self.cfg.rules.same_company_days
+        key = company_key(company)
+        if not n or not key or not self.cfg.has("applied_on"):
+            return []
+        out = []
+        for r in lay.rows():
+            if r == exclude or company_key(ws.cell(r, lay.cols["company"]).value) != key:
+                continue
+            rec = self._record(ws, lay, r)
+            d = self._date(rec.get("applied_on"))
+            if d and self._is_applied(rec) and abs((day - d).days) < n:
+                out.append(f"Row {r} · {self._label(ws, lay, r)}: submitted {d.isoformat()} "
+                           f"({abs((day - d).days)} days apart), status {rec.get('status')}. Your rule is one "
+                           f"application per company every {n} days (rules.same_company_days).")
+        return out
 
     def add_application(self, company: str, role: str, *, link: str | None = None,
                         notes: str | None = None, extra: dict[str, str] | None = None,
@@ -643,7 +744,7 @@ class Tracker:
             for col, val in extra_cols.items():
                 self._set_col(ws, lay, r, col, val, changes)
             layout_notes = self._grow_layout(wb, ws, lay, r)
-            return r, changes, layout_notes
+            return r, changes, layout_notes, self._company_warnings(ws, lay, company, self.today(), exclude=r)
 
         return self._write("add_application", mutate, expected_version, dry_run)
 
@@ -678,14 +779,19 @@ class Tracker:
             if note and cfg.has("notes"):
                 self._set(ws, lay, row, "notes",
                           self._append(ws.cell(row, lay.cols["notes"]).value, self._stamp(note)), changes)
-            return row, changes, []
+            warnings = self._company_warnings(ws, lay, rec["company"], day, exclude=row)
+            return row, changes, [], warnings
 
         return self._write("mark_applied", mutate, expected_version, dry_run)
 
     def set_status(self, row: int, status: str, *, response: str | None = None,
-                   note: str | None = None, expected_version: str | None = None,
+                   note: str | None = None, on: date | None = None, expected_version: str | None = None,
                    dry_run: bool = False) -> dict[str, Any]:
+        """`on`: when it happened (the e-mail's date), default today. It goes into the
+        reply date when this is the application's first reply."""
         cfg = self.cfg
+        if on is not None and on > self.today():
+            raise TrackerError(f"{on.isoformat()} is in the future; `on` is when the reply came.")
 
         def mutate(wb: Workbook, ws: Worksheet, lay: Layout):
             self._check_row(ws, lay, row)
@@ -701,6 +807,9 @@ class Tracker:
                 known = old is not None or cell in (None, "")   # never overwrite a word we cannot read
                 if new is not None and known and (old is None or new > old):
                     self._set(ws, lay, row, "reached", self._stage_word(ws, lay, new), changes)
+            if cfg.has("replied_on") and self._is_reply(st):
+                if ws.cell(row, lay.cols["replied_on"]).value in (None, ""):
+                    self._set(ws, lay, row, "replied_on", on or self.today(), changes)
             for key, text in (("response", response), ("notes", note)):
                 if text and cfg.has(key):
                     self._set(ws, lay, row, key,
@@ -799,12 +908,14 @@ class Tracker:
         if expected_version and expected_version != before:
             raise ConflictError(f"The tracker changed since you read it (now {before}, "
                                 f"you had {expected_version}). Re-read and retry.")
-        row, changes, layout_notes = mutate(wb, ws, lay)
+        row, changes, layout_notes, *more = mutate(wb, ws, lay)
         result: dict[str, Any] = {"row": row, "dry_run": dry_run,
                                   "changes": [c.as_dict(self._show) for c in changes],
                                   "labels": {r: self._label(ws, lay, r) for r in sorted({c.row for c in changes})}}
         if layout_notes:
             result["layout"] = layout_notes
+        if more and more[0]:   # warnings: shown with the preview, they do not stop the write
+            result["warnings"] = more[0]
         if self.lossy:
             result["warning"] = f"This workbook cannot be written: {'; '.join(self.lossy)}"
         if dry_run or not changes:
@@ -902,7 +1013,7 @@ class Tracker:
         values for date columns must be dates."""
         out: dict[int, Any] = {}
         reserved = {"num", "company", "role", "status", "applied", "applied_on", "reached",
-                    "followup_on", "followup_log"}
+                    "replied_on", "followup_on", "followup_log"}
         by_col = {c: k for k, c in lay.cols.items()}
         for key, val in extra.items():
             col = lay.cols.get(key) or next((c for c, h in lay.headers.items() if h == key), None)
@@ -913,7 +1024,7 @@ class Tracker:
             if field in reserved:
                 raise TrackerError(f"«{key}» is set by the server ({field}): use add_application's own "
                                    "arguments, then mark_applied, set_status or log_followup.")
-            if field in self.cfg.date_columns:
+            if self.cfg.is_date(field):
                 d = self._date(val)
                 if d is None:
                     raise TrackerError(f"«{val}» is not a date for «{key}»; use yyyy-mm-dd.")

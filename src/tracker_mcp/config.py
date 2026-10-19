@@ -20,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 REQUIRED_FIELDS = ("company", "role", "status")
 KNOWN_FIELDS = REQUIRED_FIELDS + (
     "num", "link", "applied", "applied_on", "channel", "response", "notes",
-    "followup_on", "followup_contact", "followup_log", "reached",
+    "followup_on", "followup_contact", "followup_log", "reached", "replied_on",
 )
 
 
@@ -83,6 +83,16 @@ class Funnel(_Strict):
     by: dict[str, dict[str, list[str]]] = {}
 
 
+class Rules(_Strict):
+    # add_application and mark_applied warn (they do not refuse) when the same company
+    # already has an application submitted this many days around the new one. 0: off.
+    same_company_days: int = Field(28, ge=0)
+    # A waiting application counts as silent from its last touch: the submit date or
+    # the newest date that starts an entry of the follow-up log, whichever is later.
+    # "applied": from the submit date only, as before 0.4.
+    silence_from: str = Field("last_touch", pattern="^(last_touch|applied)$")
+
+
 class Safety(_Strict):
     # Every write needs the user's yes: through the client's confirmation dialog
     # (MCP elicitation) when it has one, otherwise through the token from a dry run.
@@ -102,6 +112,7 @@ class Config(_Strict):
     followups: Followups = Followups()
     messages: Messages = Messages()
     funnel: Funnel = Funnel()
+    rules: Rules = Rules()
     safety: Safety = Safety()
 
     @field_validator("columns")
@@ -114,6 +125,10 @@ class Config(_Strict):
 
     def has(self, field: str) -> bool:
         return field in self.columns
+
+    def is_date(self, field: str) -> bool:
+        """A column of dates: the configured ones, and the reply date when there is one."""
+        return field in self.date_columns or field == "replied_on"
 
     def custom_fields(self) -> list[str]:
         return [f for f in self.columns if f not in KNOWN_FIELDS]

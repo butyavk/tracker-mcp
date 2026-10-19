@@ -60,6 +60,8 @@ FIELD_PATTERNS: list[tuple[str, str]] = [
                          r"|^contact|recruiter|hiring manager|контакт|^кому"),
     ("followup_log", r"(follow.?up|фоллоу.?ап).*(log|status|history|notes|статус|лог|истори)"
                      r"|^(log|history|история|лог)$"),
+    ("replied_on", r"(date|when|дата).*(repl|respon|answer|ответ)"
+                   r"|(repl|respon|answer|ответ).*(date|\bon\b|when|дата|получен)"),
     ("applied_on", r"(date|when|дата).*(appl|submit|sent|подач|отклик|отправ)"
                    r"|(appl|submit|sent|подан|отклик).*(date|\bon\b|when|дата)"),
     ("applied", r"^(applied|submitted|sent|подался|подалась|подано|откликнулся|отправлено)\s*\??$"),
@@ -493,11 +495,11 @@ def check(target: str, text: str) -> None:
 # ---------------------------------------------------------------- new
 
 TEMPLATE_HEADERS = ["#", "Company", "Role", "Location", "Salary", "Link", "Found via", "Applied on", "Applied via",
-                    "Status", "Furthest stage", "Priority", "Next step", "Response", "Follow-up date",
-                    "Follow-up contact", "Follow-up log", "Notes"]
+                    "Status", "Furthest stage", "Priority", "Next step", "Response", "Replied on",
+                    "Follow-up date", "Follow-up contact", "Follow-up log", "Notes"]
 TEMPLATE_STATUSES = ["Not applied", "Applied", "Screening", "Interview", "Offer", "Rejected", "Withdrawn",
                      "No response", "Closed"]
-TEMPLATE_WIDTHS = [5, 22, 30, 16, 14, 30, 16, 12, 16, 14, 14, 10, 24, 30, 14, 24, 40, 40]
+TEMPLATE_WIDTHS = [5, 22, 30, 16, 14, 30, 16, 12, 16, 14, 14, 10, 24, 30, 12, 14, 24, 40, 40]
 
 
 def new_tracker(path: str | Path, *, force_config: bool = False) -> tuple[Path, Path]:

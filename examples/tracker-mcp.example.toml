@@ -34,6 +34,8 @@ followup_log = "Follow-up log"
 # num = "#"                     # running number, filled in for new rows
 # applied = "Applied?"          # a yes/no column; without it "applied" means status is not not_applied
 # reached = "Furthest stage"    # the furthest funnel stage; set_status moves it forward, never back
+# replied_on = "Replied on"     # the day of the first reply; set_status fills it (its `on`, or today).
+#                               # reply_times needs it; check_tracker fills past ones from the Response text
 # Any other key is a custom field, returned as is and settable via add_application's `extra`:
 # salary = "Salary"
 
@@ -91,6 +93,15 @@ followup_dropped = "no follow-up planned: {reason}"
 "LinkedIn" = ["linkedin"]
 "Job boards" = ["hiring.cafe", "himalayas", "wellfound", "remote"]
 "Referral" = ["referral", "referred"]
+
+[rules]
+# add_application and mark_applied warn (they do not refuse) when the same company has
+# another application submitted within this many days. 0 turns the warning off.
+same_company_days = 28
+# When a waiting application counts as silent (stale_applications, close_stale):
+# "last_touch" = from the submit date or the newest dated follow-up log entry, whichever
+# is later; "applied" = from the submit date only.
+silence_from = "last_touch"
 
 [safety]
 # Every write needs the user's yes: the client's confirmation dialog (MCP elicitation)
