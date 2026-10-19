@@ -28,8 +28,9 @@ Added
   (`/plugin install tracker-mcp --marketplace butyavk/tracker-mcp`), a `server.json`
   for the MCP Registry, and evals that check a model uses the tools right and ignores
   instructions in cells.
-- `tracker-mcp auth google` signs in and opens Google's file picker: the server can
-  open only the sheets you pick (scope `drive.file`).
+- `tracker-mcp auth google --client-secret <client.json> --pick` signs in and opens
+  Google's file picker: the server can open only the sheets you pick (scope
+  `drive.file`). A client id is enough; the sign-in uses PKCE.
 
 Changed
 - Every write needs the user's yes, enforced by the server: a confirmation dialog

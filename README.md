@@ -162,7 +162,10 @@ service account. Either way, Google needs a project of yours to know who is aski
 
 Signing in with your own account asks for access to your spreadsheets
 (`spreadsheets` scope). The server opens only the sheet in `TRACKER_PATH`, but the
-permission covers all of them; if that matters, use a service account.
+permission covers all of them. For less, add `--pick` (and enable the Google Picker
+API in the project): Google's file picker opens after the sign-in, and the server can
+open only the sheets you pick there (`drive.file` scope); the picked sheet gets its
+config right away. A service account also limits access to the sheets you share with it.
 
 ## What Claude can do with it
 

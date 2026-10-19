@@ -58,9 +58,11 @@ from .stores import ConflictError, TrackerError, UnverifiedWrite, Verify, digest
 SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"   # only files the user picks
 SHEET_MIME = "application/vnd.google-apps.spreadsheet"
-# The project's OAuth client, type Desktop app. Google treats a desktop client's
-# secret as public: it names the app, it does not unlock anything. A fork can use
-# its own with TRACKER_GOOGLE_CLIENT=/path/client_secret.json.
+# The project's own OAuth client: a Desktop-app client id with scope drive.file. A
+# desktop app is a public client, so the sign-in uses PKCE and no client secret
+# (optional for this client type at Google). None until the project's consent
+# screen is published; until then `auth google` needs --client-secret, or
+# TRACKER_GOOGLE_CLIENT=/path/client.json (a client id is enough).
 BUILTIN_CLIENT: dict[str, str] | None = None
 API = "https://sheets.googleapis.com/v4/spreadsheets"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
@@ -147,7 +149,7 @@ class GoogleAuth:
     def _refresh(info: dict) -> tuple[str, float]:
         data = _post_form(info.get("token_uri", TOKEN_URI), {
             "grant_type": "refresh_token", "refresh_token": info["refresh_token"],
-            "client_id": info["client_id"], "client_secret": info.get("client_secret", "")})
+            "client_id": info["client_id"], **_secret(info)})
         return data["access_token"], time.time() + int(data.get("expires_in", 3600))
 
 
@@ -164,6 +166,11 @@ def _post_form(url: str, fields: dict[str, str]) -> dict:
     except (urllib.error.URLError, OSError) as e:
         raise TrackerError(f"Could not reach Google ({getattr(e, 'reason', e)}). Check the internet "
                            "connection and retry.") from e
+
+
+def _secret(client: dict) -> dict[str, str]:
+    """A client secret, only if the client has one (the built-in client has none)."""
+    return {"client_secret": client["client_secret"]} if client.get("client_secret") else {}
 
 
 def _client(client_secret: str | Path | None) -> dict[str, str]:
@@ -230,13 +237,13 @@ def login(client_secret: str | Path | None = None, token_file: Path | None = Non
     token_uri = client.get("token_uri", TOKEN_URI)
     data = _post_form(token_uri, {"grant_type": "authorization_code", "code": result["code"],
                                   "redirect_uri": redirect, "client_id": client["client_id"],
-                                  "client_secret": client.get("client_secret", ""), "code_verifier": verifier})
+                                  "code_verifier": verifier, **_secret(client)})
     if "refresh_token" not in data:
         raise TrackerError("Google returned no refresh token. Remove tracker-mcp from your Google account's "
                            "third-party access and sign in again.")
     target = token_file or GoogleAuth().token_file
     private_dir(target.parent)
-    text = json.dumps({"client_id": client["client_id"], "client_secret": client.get("client_secret", ""),
+    text = json.dumps({"client_id": client["client_id"], **_secret(client),
                        "refresh_token": data["refresh_token"], "token_uri": token_uri, "scope": scope}, indent=1)
     target.unlink(missing_ok=True)   # created afresh, readable by the user only from the start
     fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)

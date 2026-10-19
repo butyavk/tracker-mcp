@@ -9,8 +9,8 @@ it sends your data nowhere except where you point it:
   sends what the tools return to its model, under that client's own privacy terms.
 - **Google Sheets tracker:** the server talks to the Google Sheets API with your own
   Google sign-in, which is stored in `~/.tracker-mcp/google-token.json`. With
-  `tracker-mcp auth google` it can open only the sheets you pick in Google's file
-  picker (scope `drive.file`). Backups of changed cells are kept in
+  `tracker-mcp auth google --pick` it can open only the sheets you pick in Google's
+  file picker (scope `drive.file`). Backups of changed cells are kept in
   `~/.tracker-mcp/backups/`. Google's handling of that data is covered by
   https://policies.google.com/privacy.
 
