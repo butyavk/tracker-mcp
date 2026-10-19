@@ -40,10 +40,11 @@ confirmation flow in `server.py`. Please keep new writes on that path.
    `plugin/.claude-plugin/plugin.json` (the version and the `tracker-mcp==` pin), add a
    section to `CHANGELOG.md`, run `uv lock`.
    `tests/test_packaging.py` checks that they agree.
-2. Tag and push: `git tag v0.3.1 && git push origin v0.3.1`.
-3. `.github/workflows/release.yml` then publishes to PyPI (trusted publishing, no
-   token), to the MCP Registry (GitHub OIDC), and makes a GitHub release with the
-   `.mcpb` extension attached.
+2. Start the release: GitHub → Actions → **release** → **Run workflow** on `main` (or
+   push the tag, `git tag v0.3.1 && git push origin v0.3.1`).
+3. `.github/workflows/release.yml` checks the versions, runs the tests, publishes to
+   PyPI (trusted publishing, no token) and to the MCP Registry (GitHub OIDC), and
+   makes the GitHub release and its tag with the `.mcpb` extension attached.
 
 `sh mcpb/build.sh` builds the extension locally (needs Node).
 

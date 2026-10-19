@@ -1,27 +1,33 @@
-# Publishes a release when a tag like v0.3.0 is pushed:
+# Publishes the version in pyproject.toml, started by hand (Actions → release → Run
+# workflow) or by pushing its tag (v0.3.0):
 #   1. PyPI (trusted publishing: no token; the PyPI project trusts this workflow),
 #   2. the official MCP Registry (GitHub OIDC: the io.github.butyavk namespace),
-#   3. a GitHub release with the Claude Desktop extension (.mcpb) attached.
-# The tag must match the version in pyproject.toml, server.json and mcpb/manifest.json.
+#   3. a GitHub release and its tag, with the Claude Desktop extension (.mcpb).
+# The version must match server.json, mcpb/manifest.json, the plugin and CHANGELOG.md.
 name: release
 
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     steps:
       - uses: actions/checkout@v5
       - uses: astral-sh/setup-uv@v7
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - name: The tag matches the version everywhere
+      - name: The version matches everywhere
+        id: version
         run: |
-          v="${GITHUB_REF_NAME#v}"
-          grep -qx "version = \"$v\"" pyproject.toml
+          v="$(sed -n 's/^version = "\(.*\)"$/\1/p' pyproject.toml | head -1)"
+          if [ "$GITHUB_REF_TYPE" = tag ]; then test "$GITHUB_REF_NAME" = "v$v"; fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
           test "$(jq -r .version server.json)" = "$v"
           test "$(jq -r '.packages[0].version' server.json)" = "$v"
           test "$(jq -r .version mcpb/manifest.json)" = "$v"
@@ -61,7 +67,7 @@ jobs:
       - uses: pypa/gh-action-pypi-publish@release/v1
 
   registry:
-    needs: pypi
+    needs: [build, pypi]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -70,7 +76,7 @@ jobs:
       - uses: actions/checkout@v5
       - name: Wait until PyPI serves the new version
         run: |
-          v="${GITHUB_REF_NAME#v}"
+          v="${{ needs.build.outputs.version }}"
           for i in $(seq 30); do
             curl -fsS "https://pypi.org/pypi/tracker-mcp/$v/json" >/dev/null && exit 0
             sleep 10
@@ -85,7 +91,7 @@ jobs:
           ./mcp-publisher publish
 
   github-release:
-    needs: pypi
+    needs: [build, pypi]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -98,7 +104,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          v="${GITHUB_REF_NAME#v}"
+          v="${{ needs.build.outputs.version }}"
           awk -v v="$v" '/^## /{p = ($2 == v); next} p' CHANGELOG.md > notes.md
-          gh release create "$GITHUB_REF_NAME" --title "tracker-mcp $v" --notes-file notes.md \
+          gh release create "v$v" --target "$GITHUB_SHA" --title "tracker-mcp $v" --notes-file notes.md \
             artifacts/mcpb/*.mcpb artifacts/dist/*
