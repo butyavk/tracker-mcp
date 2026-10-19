@@ -54,7 +54,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.workbook.workbook import Workbook
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from .stores import ConflictError, TrackerError, UnverifiedWrite, Verify, digest
+from .stores import ConflictError, TrackerError, UnverifiedWrite, Verify, backup_path, digest
 
 SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"   # only files the user picks
@@ -515,8 +515,7 @@ class SheetsStore:
             private_dir(self.backup_dir)
         else:
             self.backup_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        path = self.backup_dir / f"{self.id}.{stamp}.json"
+        path = backup_path(self.backup_dir, self.id, ".json")
         path.write_text(json.dumps({"spreadsheet": self.id, "version_before": before,
                                     "cells": [{**c, "old": _plain(c["old"]), "new": _plain(c["new"])}
                                               for c in changes]},

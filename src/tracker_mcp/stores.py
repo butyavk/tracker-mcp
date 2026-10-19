@@ -24,7 +24,7 @@ import shutil
 import warnings
 import zipfile
 from collections.abc import Callable
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import Protocol
@@ -56,6 +56,21 @@ class UnverifiedWrite(TrackerError):
 
 def digest(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()[:16]
+
+
+_now = datetime.now   # the clock for backup names; tests freeze it
+
+
+def backup_path(folder: Path, stem: str, suffix: str) -> Path:
+    """<stem>.<yyyymmdd-hhmmss-micro><suffix>, never an existing file: Windows' clock can
+    return the same microsecond twice, and a backup taken right after another one (undo
+    right after a write) would overwrite it. Names still sort by time."""
+    now = _now()
+    while True:
+        path = folder / f"{stem}.{now:%Y%m%d-%H%M%S-%f}{suffix}"
+        if not path.exists():
+            return path
+        now += timedelta(microseconds=1)
 
 
 Verify = Callable[[Workbook], None]
@@ -170,8 +185,7 @@ class _FileStore:
 
     def _backup(self) -> Path:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
-        dst = self.backup_dir / f"{self.path.stem}.{stamp}{self.path.suffix}"
+        dst = backup_path(self.backup_dir, self.path.stem, self.path.suffix)
         shutil.copy2(self.path, dst)
         old = sorted(self.backup_dir.glob(f"{self.path.stem}.*{self.path.suffix}"))
         for p in old[:-KEEP_BACKUPS]:

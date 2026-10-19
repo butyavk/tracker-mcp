@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+Fixed
+- On Windows, an undo right after a write could take the same backup name as that
+  write's backup, overwrite it and undo nothing: the clock there can repeat a
+  microsecond. Backup names are now always new.
+
 ## 0.3.1 — 2026-10-19
 
 Google Sheets without a Google Cloud project of your own.

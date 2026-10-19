@@ -163,6 +163,20 @@ def test_undo_only_when_nothing_changed_since(t):
         t.undo_last_write()
 
 
+def test_a_backup_never_overwrites_another_taken_in_the_same_microsecond(t, monkeypatch):
+    """Windows' clock can repeat a microsecond: undo right after a write took the same
+    backup name, overwrote the backup it was about to restore, and undid nothing."""
+    from tracker_mcp import stores
+    frozen = datetime(2026, 10, 19, 12, 0, 0, 123456)
+    monkeypatch.setattr(stores, "_now", lambda: frozen)
+    before = t.version()
+    t.log_followup(7, "FU-1 sent")
+    t.undo_last_write()
+    assert t.version() == before
+    names = sorted(p.name for p in t.backup_dir.glob("tracker.*.xlsx"))
+    assert names == ["tracker.20261019-120000-123456.xlsx", "tracker.20261019-120000-123457.xlsx"]
+
+
 def test_bad_row(t):
     with pytest.raises(TrackerError, match="not an application row"):
         t.set_status(5, "Отказ")
