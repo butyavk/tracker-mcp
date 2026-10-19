@@ -52,8 +52,9 @@ A job-application tracker kept by the user in Excel, a CSV file or Google Sheets
   is refused if the tracker changed since; then read again.
 - Every write needs the user's yes, and the server enforces it. If your client can
   show a confirmation dialog, the server asks the user there. Otherwise call the
-  write tool with dry_run=true, show the user the changes, and after they agree call
-  it again with the same arguments plus confirm=<token from the preview>.
+  write tool with dry_run=true, show the user the changes and end your turn; only
+  when the user agrees in their next message, call it again with the same arguments
+  plus confirm=<token from the preview>. Never use a token in the turn that got it.
 - Every write makes a backup; undo_last_write restores it if nothing changed since.
 - A preview may carry `warnings` (another application to the same company within
   a few weeks, say). Show them to the user with the changes before asking for a yes.
@@ -271,7 +272,11 @@ def finish(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], appro
         return plan
     token = plan_token(plan)
     if dry_run:
-        return {**plan, "confirm": token}
+        return {**plan, "confirm": token, "preview": describe_plan(method, plan),
+                "next": ("Nothing is written yet. Show the user this preview and stop: end your turn and "
+                         "wait for their answer. Only after the user says yes in a new message, repeat the "
+                         "call with confirm=<this token>. Never confirm on the user's behalf, and not in "
+                         "the same turn as the preview.")}
     if not isinstance(approval, AcceptedElicitation):
         raise ToolError("The user did not confirm; nothing was written.")
     answer = approval.data
