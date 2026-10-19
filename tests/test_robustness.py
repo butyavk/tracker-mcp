@@ -169,7 +169,7 @@ def test_sign_in_ignores_strangers_and_keeps_the_token_private(tmp_path, monkeyp
     monkeypatch.setattr(gsheets, "_post_form", post)
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
     monkeypatch.setenv("no_proxy", "127.0.0.1")
-    token = gsheets.login(secret, token_file=tmp_path / "home" / "google-token.json")
+    token, picked = gsheets.login(secret, token_file=tmp_path / "home" / "google-token.json")
     assert exchanged["code"] == "good" and seen == [404, 404, 200]
     assert json.loads(token.read_text(encoding="utf-8"))["refresh_token"] == "r"
     if sys.platform != "win32":
@@ -365,3 +365,39 @@ def test_funnel_groups_for_one_column(tmp_path):
     t.cfg = t.cfg.model_copy(update={"funnel": t.cfg.funnel.model_copy(update={"by": {"status": {"Всё": [""]}}})})
     after = t.funnel(by="status")["groups"]
     assert [g["group"] for g in after] == ["Всё"] and after[0]["applied"] == sum(g["applied"] for g in before)
+
+
+def test_sign_in_with_the_picker_sets_up_the_picked_sheet(tmp_path, monkeypatch, capsys):
+    """`tracker-mcp auth google`: built-in client, drive.file, Google's picker, then init."""
+    from tracker_mcp.scaffold import cli
+    fake = sheets(monkeypatch, tmp_path, {"Jobs": [HEADERS, ["Acme", "EM", "Applied"]]})
+    monkeypatch.setattr(gsheets, "BUILTIN_CLIENT", {"client_id": "builtin", "client_secret": "public"})
+    monkeypatch.delenv("TRACKER_GOOGLE_CLIENT", raising=False)
+    seen = {}
+
+    def browser(url):
+        q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
+        seen.update(q)
+        target = f"{q['redirect_uri']}?state={q['state']}&code=c&picked_file_ids=abc123XYZ"
+        threading.Thread(target=lambda: urllib.request.urlopen(target, timeout=5).read(), daemon=True).start()
+        return True
+
+    monkeypatch.setattr(gsheets.webbrowser, "open", browser)
+    monkeypatch.setattr(gsheets, "_post_form", lambda url, fields: {"refresh_token": "r", "access_token": "a"})
+    monkeypatch.setenv("NO_PROXY", "127.0.0.1")
+    monkeypatch.setenv("no_proxy", "127.0.0.1")
+    assert cli(["auth", "google"]) == 0
+    assert seen["scope"] == gsheets.FILE_SCOPE and seen["trigger_onepick"] == "true"
+    assert seen["mimetypes"] == gsheets.SHEET_MIME and seen["client_id"] == "builtin"
+    out = capsys.readouterr().out
+    assert "Wrote" in out and '"TRACKER_PATH": "https://docs.google.com/spreadsheets/d/abc123XYZ/edit"' in out
+    token = json.loads((tmp_path / "home" / "google-token.json").read_text(encoding="utf-8"))
+    assert token["scope"] == gsheets.FILE_SCOPE
+    assert load_config(URL).sheet == "Jobs" and fake.calls
+
+
+def test_without_a_built_in_client_the_message_says_what_to_do(monkeypatch):
+    monkeypatch.setattr(gsheets, "BUILTIN_CLIENT", None)
+    monkeypatch.delenv("TRACKER_GOOGLE_CLIENT", raising=False)
+    with pytest.raises(TrackerError, match="--client-secret"):
+        gsheets.login()

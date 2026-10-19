@@ -570,6 +570,13 @@ def _next(target: str) -> str:
             "(from a clone of the repository: uv run tracker-mcp ...)")
 
 
+def _connect(tracker: str) -> str:
+    entry = {"mcpServers": {"tracker": {"command": "uvx", "args": ["tracker-mcp"], "env": {"TRACKER_PATH": tracker}}}}
+    return ("\nConnect it, e.g. in Claude Desktop (Settings → Developer → Edit Config):\n"
+            + json.dumps(entry, indent=2)
+            + f"\nor: claude mcp add tracker -e TRACKER_PATH={_shell(tracker)} -- uvx tracker-mcp")
+
+
 def cli(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="tracker-mcp")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -587,8 +594,11 @@ def cli(argv: list[str]) -> int:
     sub.add_parser("example", help="print a config with every key explained")
     p_auth = sub.add_parser("auth", help="sign in to Google once, for trackers in Google Sheets")
     p_auth.add_argument("provider", choices=["google"])
-    p_auth.add_argument("--client-secret", required=True,
-                        help="client_secret.json of an OAuth client of type Desktop app (Google Cloud console)")
+    p_auth.add_argument("--client-secret",
+                        help="your own OAuth client (Desktop app) instead of the built-in one; "
+                             "scope `spreadsheets` unless --pick")
+    p_auth.add_argument("--pick", action="store_true",
+                        help="with --client-secret: pick the tracker in Google's picker (scope drive.file)")
     p_auth.add_argument("--no-browser", action="store_true", help="only print the sign-in link")
     args = parser.parse_args(argv)
     try:
@@ -603,9 +613,19 @@ def cli(argv: list[str]) -> int:
             print(example_config())
         else:
             from .gsheets import login
-            token = login(args.client_secret, open_browser=not args.no_browser)
-            print(f"Signed in. The token is in {token} (keep it private).\n"
-                  "Next: tracker-mcp init https://docs.google.com/spreadsheets/d/<id>/edit")
+            token, picked = login(args.client_secret, open_browser=not args.no_browser,
+                                  pick=True if args.pick else None)
+            print(f"Signed in. The sign-in is kept in {token} (keep it private).")
+            if not picked:
+                print("Next: tracker-mcp init https://docs.google.com/spreadsheets/d/<id>/edit")
+            for sheet in picked:
+                url = f"https://docs.google.com/spreadsheets/d/{sheet}/edit"
+                if config_path(url).exists():
+                    print(f"\n{url}\nalready has a config: {config_path(url)}")
+                else:
+                    target, g, _ = init(url)
+                    print("\n" + report(g, target))
+                print(_connect(url))
     except TrackerError as e:
         print(f"tracker-mcp: {e}", file=sys.stderr)
         return 2

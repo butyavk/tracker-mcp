@@ -16,14 +16,17 @@ Safety, compared with a file:
 - after writing, the cells are read back and checked; on a mismatch the old values
   are restored and the write is reported as failed.
 
-Authorization, either of:
-- your own Google account: `tracker-mcp auth google --client-secret client_secret.json`
-  once (an OAuth "Desktop app" client from Google Cloud); the refresh token is kept
-  in ~/.tracker-mcp/google-token.json;
+Authorization, one of:
+- `tracker-mcp auth google`: sign in with the project's own OAuth client and pick
+  the tracker in Google's file picker. Scope `drive.file`: the server can open only
+  the sheets picked this way (or created by it), nothing else in the account;
+- your own OAuth client: `tracker-mcp auth google --client-secret client_secret.json`
+  (a "Desktop app" client from your Google Cloud project), scope `spreadsheets`;
+  the refresh token is kept in ~/.tracker-mcp/google-token.json;
 - a service account: GOOGLE_APPLICATION_CREDENTIALS=key.json, and share the sheet
   with the service account's e-mail.
-Scope: https://www.googleapis.com/auth/spreadsheets only. No Google libraries are
-needed: plain HTTPS (urllib) plus PyJWT for the service-account assertion.
+No Google libraries are needed: plain HTTPS (urllib) plus PyJWT for the
+service-account assertion.
 """
 
 from __future__ import annotations
@@ -53,6 +56,12 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from .stores import ConflictError, TrackerError, UnverifiedWrite, Verify, digest
 
 SCOPE = "https://www.googleapis.com/auth/spreadsheets"
+FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"   # only files the user picks
+SHEET_MIME = "application/vnd.google-apps.spreadsheet"
+# The project's OAuth client, type Desktop app. Google treats a desktop client's
+# secret as public: it names the app, it does not unlock anything. A fork can use
+# its own with TRACKER_GOOGLE_CLIENT=/path/client_secret.json.
+BUILTIN_CLIENT: dict[str, str] | None = None
 API = "https://sheets.googleapis.com/v4/spreadsheets"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 LOGIN_TIMEOUT = 300   # seconds to wait for the browser to come back
@@ -157,10 +166,27 @@ def _post_form(url: str, fields: dict[str, str]) -> dict:
                            "connection and retry.") from e
 
 
-def login(client_secret: str | Path, token_file: Path | None = None, open_browser: bool = True) -> Path:
-    """One-time OAuth sign-in for a Desktop-app client (loopback redirect + PKCE)."""
-    raw = json.loads(Path(client_secret).expanduser().read_text(encoding="utf-8"))
-    client = raw.get("installed") or raw.get("web") or raw
+def _client(client_secret: str | Path | None) -> dict[str, str]:
+    path = client_secret or os.environ.get("TRACKER_GOOGLE_CLIENT")
+    if path:
+        raw = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+        return raw.get("installed") or raw.get("web") or raw
+    if not BUILTIN_CLIENT:
+        raise TrackerError("This build has no built-in Google client. Create a Desktop-app OAuth client in "
+                           "your Google Cloud project and pass it: tracker-mcp auth google --client-secret "
+                           "client_secret.json")
+    return BUILTIN_CLIENT
+
+
+def login(client_secret: str | Path | None = None, token_file: Path | None = None, open_browser: bool = True,
+          pick: bool | None = None) -> tuple[Path, list[str]]:
+    """One-time OAuth sign-in (loopback redirect + PKCE). With `pick` (the default for
+    the built-in client) Google's file picker opens after sign-in, the scope is
+    drive.file, and the ids of the picked sheets are returned."""
+    client = _client(client_secret)
+    if pick is None:
+        pick = not (client_secret or os.environ.get("TRACKER_GOOGLE_CLIENT"))
+    scope = FILE_SCOPE if pick else SCOPE
     verifier = secrets.token_urlsafe(64)
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
     state = secrets.token_urlsafe(16)
@@ -183,11 +209,13 @@ def login(client_secret: str | Path, token_file: Path | None = None, open_browse
 
     server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
     redirect = f"http://127.0.0.1:{server.server_port}/"
-    url = client.get("auth_uri", "https://accounts.google.com/o/oauth2/auth") + "?" + urllib.parse.urlencode({
-        "client_id": client["client_id"], "redirect_uri": redirect, "response_type": "code", "scope": SCOPE,
-        "code_challenge": challenge, "code_challenge_method": "S256", "access_type": "offline",
-        "prompt": "consent", "state": state})
-    print(f"Open this link to sign in to Google:\n{url}\n", flush=True)
+    params = {"client_id": client["client_id"], "redirect_uri": redirect, "response_type": "code", "scope": scope,
+              "code_challenge": challenge, "code_challenge_method": "S256", "access_type": "offline",
+              "prompt": "consent", "state": state}
+    if pick:   # Google Picker for desktop apps: choose the tracker right after signing in
+        params.update(trigger_onepick="true", mimetypes=SHEET_MIME)
+    url = client.get("auth_uri", "https://accounts.google.com/o/oauth2/auth") + "?" + urllib.parse.urlencode(params)
+    print(f"Open this link to sign in to Google{' and pick your tracker' if pick else ''}:\n{url}\n", flush=True)
     if open_browser:
         webbrowser.open(url)
     server.timeout = 5
@@ -209,12 +237,12 @@ def login(client_secret: str | Path, token_file: Path | None = None, open_browse
     target = token_file or GoogleAuth().token_file
     private_dir(target.parent)
     text = json.dumps({"client_id": client["client_id"], "client_secret": client.get("client_secret", ""),
-                       "refresh_token": data["refresh_token"], "token_uri": token_uri, "scope": SCOPE}, indent=1)
+                       "refresh_token": data["refresh_token"], "token_uri": token_uri, "scope": scope}, indent=1)
     target.unlink(missing_ok=True)   # created afresh, readable by the user only from the start
     fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
         f.write(text)
-    return target
+    return target, [i for i in result.get("picked_file_ids", "").split(",") if i]
 
 
 def http_transport(auth: GoogleAuth) -> Transport:
