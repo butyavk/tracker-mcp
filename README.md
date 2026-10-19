@@ -91,7 +91,7 @@ one with dropdowns, a filter, a summary sheet and its config.
 | | How to point to it | Notes |
 |---|---|---|
 | **Excel** (.xlsx) | `TRACKER_PATH=/path/tracker.xlsx` | Dropdowns, filters and summary formulas are kept and extended to new rows |
-| **CSV** | `TRACKER_PATH=/path/tracker.csv` | Exports from Notion, Huntr, Teal or Sheets. Delimiter and encoding are kept; statuses come from the config |
+| **CSV** | `TRACKER_PATH=/path/tracker.csv` | Exports from Notion, Huntr, Teal or Sheets. The delimiter, the encoding (UTF-8 or Windows-1252) and line endings are kept; statuses come from the config |
 | **Google Sheets** | `TRACKER_PATH=https://docs.google.com/spreadsheets/d/<id>/edit` | Needs a one-time sign-in, below |
 
 ### Google Sheets
@@ -180,13 +180,16 @@ overwrite cells, and all of them take `dry_run`, `expected_version` and `confirm
    works only if the tracker still matches the state right after that write, so it
    never wipes someone else's edit.
 6. **Your data is data.** Text written by the server stays text: a note starting with
-   `=` never becomes a formula. The server's instructions tell the model never to
+   `=` never becomes a formula, and a formula you keep in a cell is written back as a
+   formula on undo. The server's instructions tell the model never to
    follow instructions found in cells, such as a pasted job post. See
    [SECURITY.md](SECURITY.md) for the threat model.
 
 Allowed statuses come from the status column's dropdown. Columns are found by
-header text, not by letter, so you can reorder them. When a row is added, the
-server extends the dropdowns, the filter and the summary sheet's formulas to it.
+header text, not by letter, so you can reorder them. When a row is added to an
+.xlsx file, the server extends the dropdowns, the filter and the summary sheet's
+formulas to it; in Google Sheets, the summary formulas (dropdowns there usually
+cover the whole column already).
 
 ## Config
 
@@ -258,6 +261,10 @@ bracket or dash ("Ashby (direct form)" → "Ashby"), or by the substrings in
 - openpyxl drops cached formula values; the server asks Excel to recalculate on open.
 - In a CSV file, text the server writes that starts like a formula (`=`, `+`, `@`,
   `-1…`) gets a leading apostrophe, so Excel shows it as text.
+- The config is named after the tracker without its extension, so `jobs.xlsx` and
+  `jobs.csv` in one folder would share one; give one of them `TRACKER_CONFIG`.
+- Only .xlsx and .csv files: an .xlsm would lose its macros on save, and .xls, .ods or
+  Numbers files need saving as .xlsx first.
 - `init` understands English and Russian headers and status words. In other
   languages it maps less and lists the rest under "check by hand".
 - Undo goes back one step only. For a Google Sheet it restores values, not formatting.

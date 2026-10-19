@@ -22,6 +22,7 @@ import os
 import re
 import shutil
 import warnings
+import zipfile
 from collections.abc import Callable
 from datetime import date, datetime
 from io import BytesIO
@@ -29,6 +30,8 @@ from pathlib import Path
 from typing import Protocol
 
 import openpyxl
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
+from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.workbook.workbook import Workbook
 
 KEEP_BACKUPS = 200
@@ -40,6 +43,14 @@ class TrackerError(Exception):
 
 class ConflictError(TrackerError):
     """The source changed (or is open elsewhere) under us; re-read and retry."""
+
+
+class UnverifiedWrite(TrackerError):
+    """The write was sent but could not be read back to check it."""
+
+    def __init__(self, backup: str, message: str):
+        super().__init__(message)
+        self.backup = backup
 
 
 def digest(data: bytes) -> str:
@@ -71,9 +82,15 @@ def open_store(target: str | Path, backup_dir: str | Path | None = None) -> Stor
     if is_google_sheet(t):
         from .gsheets import SheetsStore
         return SheetsStore(t, backup_dir)
-    if t.lower().endswith(".csv"):
+    suffix = Path(t).suffix.lower()
+    if suffix == ".csv":
         return CsvStore(t, backup_dir)
-    return XlsxStore(t, backup_dir)
+    if suffix == ".xlsx":
+        return XlsxStore(t, backup_dir)
+    # .xlsm would lose its macros and its file type on save; .xls and .ods are other formats.
+    raise TrackerError(f"tracker-mcp works with .xlsx and .csv files and Google Sheets, not «{suffix or t}». "
+                       "Save a copy of the tracker as .xlsx (Excel or Numbers: File → Save As / Export) "
+                       "and point the server to it.")
 
 
 # ---------------------------------------------------------------- files
@@ -165,7 +182,11 @@ class XlsxStore(_FileStore):
     kind = "xlsx"
 
     def _parse(self, data: bytes) -> Workbook:
-        return openpyxl.load_workbook(BytesIO(data))
+        try:
+            return openpyxl.load_workbook(BytesIO(data))
+        except (zipfile.BadZipFile, InvalidFileException, KeyError) as e:
+            raise TrackerError(f"{self.path.name} is not a readable .xlsx file ({e}). If it was saved "
+                               "in another format, save it again as an Excel Workbook (.xlsx).") from e
 
     def load(self) -> tuple[Workbook, str, list[str]]:
         data = self._bytes()
@@ -193,12 +214,16 @@ class CsvStore(_FileStore):
 
     def __init__(self, path: str | Path, backup_dir: str | Path | None = None):
         super().__init__(path, backup_dir)
-        self.delimiter, self.bom = ",", False
+        self.delimiter, self.bom, self.encoding, self.newline = ",", False, "utf-8", "\r\n"
         self.sheet = re.sub(r"[\[\]:*?/\\]", "_", self.path.stem)[:31] or "Sheet1"
 
     def _parse(self, data: bytes) -> Workbook:
         self.bom = data.startswith(b"\xef\xbb\xbf")
-        text = data.decode("utf-8-sig")
+        try:
+            text, self.encoding = data.decode("utf-8-sig"), "utf-8"
+        except UnicodeDecodeError:   # Excel's plain "CSV" on Windows
+            text, self.encoding = data.decode("cp1252", errors="replace"), "cp1252"
+        self.newline = "\r\n" if "\r\n" in text[:65536] or "\n" not in text else "\n"
         try:
             self.delimiter = csv.Sniffer().sniff(text[:4096], delimiters=",;\t").delimiter
         except csv.Error:
@@ -207,7 +232,7 @@ class CsvStore(_FileStore):
         ws = wb.active
         ws.title = self.sheet
         for row in csv.reader(io.StringIO(text, newline=""), delimiter=self.delimiter):
-            ws.append([v if v != "" else None for v in row])
+            ws.append([ILLEGAL_CHARACTERS_RE.sub(" ", v) if v != "" else None for v in row])
         return wb
 
     def load(self) -> tuple[Workbook, str, list[str]]:
@@ -216,10 +241,15 @@ class CsvStore(_FileStore):
 
     def _render(self, wb: Workbook) -> bytes:
         out = io.StringIO(newline="")
-        writer = csv.writer(out, delimiter=self.delimiter)
+        writer = csv.writer(out, delimiter=self.delimiter, lineterminator=self.newline)
         for row in wb.worksheets[0].iter_rows(values_only=True):
             writer.writerow([_csv_text(v) for v in row])
-        return (b"\xef\xbb\xbf" if self.bom else b"") + out.getvalue().encode("utf-8")
+        try:
+            body = out.getvalue().encode(self.encoding)
+        except UnicodeEncodeError as e:
+            raise TrackerError(f"«{e.object[e.start:e.end]}» cannot be written to this CSV file: it is saved "
+                               f"as {self.encoding}. Save it as «CSV UTF-8» in Excel and retry.") from e
+        return (b"\xef\xbb\xbf" if self.bom else b"") + body
 
 
 def _csv_text(value: object) -> str:

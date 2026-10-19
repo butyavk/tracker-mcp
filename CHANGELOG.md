@@ -27,6 +27,9 @@ Changed
 - Writes are refused when openpyxl would drop parts of the workbook on save.
 - Text written by the server never becomes a formula, in any format.
 - On Windows, a file held by Excel, OneDrive or an antivirus gives a clear error.
+- Only .xlsx and .csv files are accepted: an .xlsm would lose its macros on save, and
+  .xls or .ods files get a message to save as .xlsx. A damaged file, a CSV saved as
+  Windows-1252, no network, or odd Google tab names give readable errors.
 
 ## 0.2.0 and 0.1.0
 

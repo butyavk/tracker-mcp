@@ -8,8 +8,9 @@ writes back only the cells that changed, in one atomic `batchUpdate`.
 Safety, compared with a file:
 - version = hash of all cell values; a write is refused if it moved since the read
   (the API has no If-Match for values, so a short window remains, as with files);
-- strings are written as strings (`stringValue`), never parsed: a note starting
-  with "=" stays text and cannot become a formula;
+- text is written as text (`stringValue`), never parsed: a note starting with "="
+  stays text and cannot become a formula. Each cell's kind (text, formula, number,
+  date) is read with it, and only a cell that holds a formula is written as one;
 - each write keeps a local JSON backup of the old and new value of every cell it
   touched; undo writes the old values back;
 - after writing, the cells are read back and checked; on a mismatch the old values
@@ -44,15 +45,17 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook.workbook import Workbook
 from openpyxl.worksheet.datavalidation import DataValidation
 
-from .stores import ConflictError, TrackerError, Verify, digest
+from .stores import ConflictError, TrackerError, UnverifiedWrite, Verify, digest
 
 SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 API = "https://sheets.googleapis.com/v4/spreadsheets"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
+LOGIN_TIMEOUT = 300   # seconds to wait for the browser to come back
 EPOCH = datetime(1899, 12, 30)
 FIELDS = ("properties.title,sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),"
           "data(rowData(values(userEnteredValue,effectiveFormat.numberFormat,dataValidation))))")
@@ -65,10 +68,20 @@ def home_dir() -> Path:
     return Path(os.environ.get("TRACKER_MCP_HOME") or Path.home() / ".tracker-mcp").expanduser()
 
 
+def private_dir(path: Path) -> Path:
+    """Create a folder under home_dir() so only the user can read it: it holds the
+    Google sign-in and backups of cell values."""
+    home = home_dir()
+    if not home.exists():
+        home.mkdir(parents=True, mode=0o700, exist_ok=True)
+    path.mkdir(parents=True, mode=0o700, exist_ok=True)
+    return path
+
+
 def sheet_id(target: str) -> str:
     if target.startswith("gsheet:"):
         return target.split(":", 1)[1].strip("/")
-    m = re.search(r"/spreadsheets/d/([A-Za-z0-9_-]+)", target)
+    m = re.search(r"/spreadsheets/(?:u/\d+/)?d/([A-Za-z0-9_-]+)", target)
     if not m:
         raise TrackerError(f"Not a Google Sheets URL: {target}")
     return m.group(1)
@@ -137,6 +150,9 @@ def _post_form(url: str, fields: dict[str, str]) -> dict:
         detail = e.read().decode(errors="replace")[:300]
         raise TrackerError(f"Google sign-in failed ({e.code}): {detail}. Run `tracker-mcp auth google` "
                            "again if the token was revoked.") from e
+    except (urllib.error.URLError, OSError) as e:
+        raise TrackerError(f"Could not reach Google ({getattr(e, 'reason', e)}). Check the internet "
+                           "connection and retry.") from e
 
 
 def login(client_secret: str | Path, token_file: Path | None = None, open_browser: bool = True) -> Path:
@@ -151,11 +167,14 @@ def login(client_secret: str | Path, token_file: Path | None = None, open_browse
     class Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self):  # noqa: N802
             q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(self.path).query))
-            result.update(q)
-            self.send_response(200)
+            ours = q.get("state") == state   # anything else (a favicon, another page) is ignored
+            if ours:
+                result.update(q)
+            self.send_response(200 if ours else 404)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
             self.end_headers()
-            self.wfile.write(b"tracker-mcp: signed in. You can close this tab.")
+            if ours:
+                self.wfile.write(b"tracker-mcp: done. You can close this tab.")
 
         def log_message(self, *args):
             pass
@@ -169,11 +188,15 @@ def login(client_secret: str | Path, token_file: Path | None = None, open_browse
     print(f"Open this link to sign in to Google:\n{url}\n", flush=True)
     if open_browser:
         webbrowser.open(url)
-    while "code" not in result and "error" not in result:
+    server.timeout = 5
+    deadline = time.monotonic() + LOGIN_TIMEOUT
+    while "code" not in result and "error" not in result and time.monotonic() < deadline:
         server.handle_request()
     server.server_close()
-    if result.get("state") != state or "code" not in result:
-        raise TrackerError(f"Google sign-in did not complete: {result.get('error', 'state mismatch')}")
+    if "code" not in result:
+        raise TrackerError("Google sign-in did not complete: "
+                           f"{result.get('error', f'no answer within {LOGIN_TIMEOUT // 60} minutes')}. "
+                           "The client must be of type Desktop app.")
     token_uri = client.get("token_uri", TOKEN_URI)
     data = _post_form(token_uri, {"grant_type": "authorization_code", "code": result["code"],
                                   "redirect_uri": redirect, "client_id": client["client_id"],
@@ -182,14 +205,13 @@ def login(client_secret: str | Path, token_file: Path | None = None, open_browse
         raise TrackerError("Google returned no refresh token. Remove tracker-mcp from your Google account's "
                            "third-party access and sign in again.")
     target = token_file or GoogleAuth().token_file
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps({"client_id": client["client_id"], "client_secret": client.get("client_secret", ""),
-                                  "refresh_token": data["refresh_token"], "token_uri": token_uri,
-                                  "scope": SCOPE}, indent=1), encoding="utf-8")
-    try:
-        target.chmod(0o600)
-    except OSError:
-        pass
+    private_dir(target.parent)
+    text = json.dumps({"client_id": client["client_id"], "client_secret": client.get("client_secret", ""),
+                       "refresh_token": data["refresh_token"], "token_uri": token_uri, "scope": SCOPE}, indent=1)
+    target.unlink(missing_ok=True)   # created afresh, readable by the user only from the start
+    fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(text)
     return target
 
 
@@ -207,6 +229,9 @@ def http_transport(auth: GoogleAuth) -> Transport:
                     auth.reset()
                     continue
                 raise TrackerError(_api_error(e)) from e
+            except (urllib.error.URLError, OSError) as e:
+                raise TrackerError(f"Could not reach Google Sheets ({getattr(e, 'reason', e)}). Check the "
+                                   "internet connection and retry.") from e
         raise TrackerError("Google Sheets: authorization keeps failing")
     return call
 
@@ -223,44 +248,62 @@ def _api_error(e: urllib.error.HTTPError) -> str:
 
 
 # ---------------------------------------------------------------- store
+#
+# Every cell is read with its kind: "formula", "text", "number", "date", "bool" or
+# "empty". The Sheets API returns a formula and text that starts with "=" as the
+# same string, so the kind, not the value, decides how a value is written back.
 
-def _from_api(cell: dict) -> Any:
+def _from_api(cell: dict) -> tuple[Any, str]:
     v = cell.get("userEnteredValue")
     if not v:
-        return None
+        return None, "empty"
     if "formulaValue" in v:
-        return v["formulaValue"]
+        return v["formulaValue"], "formula"
     if "stringValue" in v:
-        return v["stringValue"]
+        return ILLEGAL_CHARACTERS_RE.sub(" ", v["stringValue"]), "text"   # openpyxl refuses control chars
     if "boolValue" in v:
-        return v["boolValue"]
+        return v["boolValue"], "bool"
     if "numberValue" in v:
         n = v["numberValue"]
-        kind = cell.get("effectiveFormat", {}).get("numberFormat", {}).get("type")
-        if kind in ("DATE", "DATE_TIME"):
-            return EPOCH + timedelta(days=n)
-        return int(n) if isinstance(n, float) and n.is_integer() else n
-    return None
+        if cell.get("effectiveFormat", {}).get("numberFormat", {}).get("type") in ("DATE", "DATE_TIME"):
+            return EPOCH + timedelta(days=n), "date"
+        return (int(n) if isinstance(n, float) and n.is_integer() else n), "number"
+    return None, "empty"
 
 
-def _to_api(value: Any, was_formula: bool) -> tuple[dict, str]:
-    """CellData and its field mask. Text never becomes a formula unless the cell held one."""
-    if value is None or value == "":
+def _kind(cell) -> str:
+    """The kind of a cell in the in-memory workbook, as the tracker left it."""
+    v = cell.value
+    if v is None or v == "":
+        return "empty"
+    if isinstance(v, bool):
+        return "bool"
+    if isinstance(v, (datetime, date)):
+        return "date"
+    if isinstance(v, (int, float)):
+        return "number"
+    return "formula" if cell.data_type == "f" else "text"
+
+
+def _to_api(value: Any, kind: str) -> tuple[dict, str]:
+    """CellData and its field mask for a value of the given kind."""
+    if kind == "empty" or value is None or value == "":
         return {}, "userEnteredValue"
-    if isinstance(value, bool):
-        return {"userEnteredValue": {"boolValue": value}}, "userEnteredValue"
-    if isinstance(value, (datetime, date)):
-        d = value if isinstance(value, datetime) else datetime(value.year, value.month, value.day)
+    if kind == "bool":
+        return {"userEnteredValue": {"boolValue": bool(value)}}, "userEnteredValue"
+    if kind == "date":
+        d = value if isinstance(value, datetime) else (
+            datetime(value.year, value.month, value.day) if isinstance(value, date)
+            else datetime.fromisoformat(str(value)))
         serial = (d - EPOCH).total_seconds() / 86400
         return ({"userEnteredValue": {"numberValue": serial},
                  "userEnteredFormat": {"numberFormat": {"type": "DATE", "pattern": "yyyy-mm-dd"}}},
                 "userEnteredValue,userEnteredFormat.numberFormat")
-    if isinstance(value, (int, float)):
+    if kind == "number":
         return {"userEnteredValue": {"numberValue": value}}, "userEnteredValue"
-    text = str(value)
-    if was_formula and text.startswith("="):
-        return {"userEnteredValue": {"formulaValue": text}}, "userEnteredValue"
-    return {"userEnteredValue": {"stringValue": text}}, "userEnteredValue"
+    if kind == "formula":
+        return {"userEnteredValue": {"formulaValue": str(value)}}, "userEnteredValue"
+    return {"userEnteredValue": {"stringValue": str(value)}}, "userEnteredValue"
 
 
 def _plain(value: Any) -> Any:
@@ -274,6 +317,17 @@ def _plain(value: Any) -> Any:
     return value
 
 
+def _safe_title(title: str, used: set[str]) -> str:
+    """openpyxl refuses some characters in sheet titles that Google allows ("Q1/Q2")."""
+    base = re.sub(r"[\\/*?:\[\]]", "_", title) or "Sheet"
+    safe, n = base, 1
+    while safe in used:
+        n += 1
+        safe = f"{base} ({n})"
+    used.add(safe)
+    return safe
+
+
 class SheetsStore:
     kind = "gsheet"
     single_sheet = False
@@ -284,7 +338,7 @@ class SheetsStore:
         self.label = f"Google Sheet {self.id}"
         self.backup_dir = Path(backup_dir).expanduser() if backup_dir else home_dir() / "backups" / self.id
         self._call = transport or http_transport(GoogleAuth())
-        self._loaded: dict[str, dict] = {}   # version -> {"cells", "sheets"} of that read
+        self._loaded: dict[str, dict] = {}   # version -> {"cells", "kinds", "sheets"} of that read
 
     # ---- reading
 
@@ -295,11 +349,15 @@ class SheetsStore:
         doc = self._fetch()
         wb = Workbook()
         wb.remove(wb.active)
+        wb.tracker_titles = {}   # Google title -> title in the workbook, read by the tracker
         cells: dict[tuple[str, int, int], Any] = {}
+        kinds: dict[tuple[str, int, int], str] = {}
         sheets: dict[str, dict] = {}
+        used: set[str] = set()
         for sheet in doc.get("sheets", []):
             props = sheet["properties"]
-            title = props["title"]
+            title = _safe_title(props["title"], used)
+            wb.tracker_titles[props["title"]] = title
             ws = wb.create_sheet(title)
             sheets[title] = {"id": props["sheetId"], "rows": props.get("gridProperties", {}).get("rowCount", 1000),
                              "cols": props.get("gridProperties", {}).get("columnCount", 26)}
@@ -308,10 +366,13 @@ class SheetsStore:
             for block in sheet.get("data", []):
                 for r, row in enumerate(block.get("rowData", []), start=1):
                     for c, cell in enumerate(row.get("values", []), start=1):
-                        value = _from_api(cell)
+                        value, kind = _from_api(cell)
                         if value is not None:
-                            ws.cell(r, c, value)
+                            target = ws.cell(r, c, value)
+                            if kind == "text":
+                                target.data_type = "s"   # "=..." text stays text
                             cells[(title, r, c)] = value
+                            kinds[(title, r, c)] = kind
                         cond = cell.get("dataValidation", {}).get("condition", {})
                         if cond.get("type") == "ONE_OF_LIST" and c not in lists:
                             lists[c] = [v.get("userEnteredValue", "") for v in cond.get("values", [])]
@@ -323,10 +384,11 @@ class SheetsStore:
                 dv = DataValidation(type="list", formula1=ref)
                 dv.add(f"{get_column_letter(c)}1:{get_column_letter(c)}{last}")
                 ws.add_data_validation(dv)
-        snapshot = {"|".join(map(str, k)): _plain(v) for k, v in sorted(cells.items())}
+        snapshot = {"|".join(map(str, k)): [_plain(v), kinds[k]] for k, v in sorted(cells.items())}
         version = digest(json.dumps(snapshot, sort_keys=True, ensure_ascii=False, default=str).encode())
-        self._loaded = {version: {"cells": cells, "sheets": sheets}}
-        return wb, version, {"cells": cells, "sheets": sheets}
+        state = {"cells": cells, "kinds": kinds, "sheets": sheets}
+        self._loaded = {version: state}
+        return wb, version, state
 
     def load(self) -> tuple[Workbook, str, list[str]]:
         wb, version, _ = self._read()
@@ -351,25 +413,26 @@ class SheetsStore:
                 for cell in row:
                     key = (title, cell.row, cell.column)
                     seen.add(key)
-                    old = base["cells"].get(key)
-                    if _plain(cell.value) != _plain(old):
+                    old, old_kind, new_kind = base["cells"].get(key), base["kinds"].get(key, "empty"), _kind(cell)
+                    if _plain(cell.value) != _plain(old) or (new_kind != old_kind and new_kind != "empty"):
                         out.append({"sheet": title, "row": cell.row, "col": cell.column,
-                                    "old": old, "new": cell.value})
+                                    "old": old, "old_kind": old_kind, "new": cell.value, "new_kind": new_kind})
             for key, old in base["cells"].items():
                 if key[0] == title and key not in seen:
-                    out.append({"sheet": title, "row": key[1], "col": key[2], "old": old, "new": None})
+                    out.append({"sheet": title, "row": key[1], "col": key[2], "old": old,
+                                "old_kind": base["kinds"][key], "new": None, "new_kind": "empty"})
         return out
 
-    def _requests(self, changes: list[dict], sheets: dict, value_key: str) -> list[dict]:
+    def _requests(self, changes: list[dict], sheets: dict, side: str, grow: bool) -> list[dict]:
         reqs: list[dict] = []
-        for title, meta in sheets.items():
-            need = max((ch["row"] for ch in changes if ch["sheet"] == title), default=0)
-            if need > meta["rows"]:
-                reqs.append({"appendDimension": {"sheetId": meta["id"], "dimension": "ROWS",
-                                                 "length": need - meta["rows"] + 50}})
+        if grow:
+            for title, meta in sheets.items():
+                need = max((ch["row"] for ch in changes if ch["sheet"] == title), default=0)
+                if need > meta["rows"]:
+                    reqs.append({"appendDimension": {"sheetId": meta["id"], "dimension": "ROWS",
+                                                     "length": need - meta["rows"] + 50}})
         for ch in changes:
-            old = ch["old"] if value_key == "new" else ch["new"]
-            data, fields = _to_api(ch[value_key], isinstance(old, str) and old.startswith("="))
+            data, fields = _to_api(ch[side], ch[f"{side}_kind"])
             reqs.append({"updateCells": {
                 "range": {"sheetId": sheets[ch["sheet"]]["id"], "startRowIndex": ch["row"] - 1,
                           "endRowIndex": ch["row"], "startColumnIndex": ch["col"] - 1, "endColumnIndex": ch["col"]},
@@ -377,7 +440,10 @@ class SheetsStore:
         return reqs
 
     def _backup(self, changes: list[dict], before: str) -> Path:
-        self.backup_dir.mkdir(parents=True, exist_ok=True)
+        if self.backup_dir.is_relative_to(home_dir()):
+            private_dir(self.backup_dir)
+        else:
+            self.backup_dir.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
         path = self.backup_dir / f"{self.id}.{stamp}.json"
         path.write_text(json.dumps({"spreadsheet": self.id, "version_before": before,
@@ -386,10 +452,17 @@ class SheetsStore:
                                    ensure_ascii=False, indent=1, default=str), encoding="utf-8")
         return path
 
-    def _apply(self, changes: list[dict], sheets: dict, value_key: str) -> None:
+    def _apply(self, changes: list[dict], sheets: dict, side: str, grow: bool = False) -> None:
         if changes:
             self._call("POST", f"{API}/{self.id}:batchUpdate",
-                       {"requests": self._requests(changes, sheets, value_key)})
+                       {"requests": self._requests(changes, sheets, side, grow)})
+
+    def _read_back(self) -> tuple[Workbook, str, dict]:
+        try:
+            return self._read()
+        except TrackerError:
+            time.sleep(2)   # a 429 or a network blip right after a write: try once more
+            return self._read()
 
     def save(self, wb: Workbook, before: str, verify: Verify) -> tuple[str, str]:
         base = self._loaded.get(before)
@@ -398,8 +471,13 @@ class SheetsStore:
             raise ConflictError("The sheet changed since it was read; nothing was saved. Re-read and retry.")
         changes = self._diff(wb, current)
         backup = self._backup(changes, before)
-        self._apply(changes, current["sheets"], "new")
-        written, after, _ = self._read()
+        self._apply(changes, current["sheets"], "new", grow=True)
+        try:
+            written, after, _ = self._read_back()
+        except TrackerError as e:
+            raise UnverifiedWrite(backup.name, f"The change was sent to Google, but reading the sheet back "
+                                  f"to check it failed: {e} Do not repeat the call: read the tracker again "
+                                  "to see whether it landed.") from e
         try:
             verify(written)
         except TrackerError:
@@ -413,10 +491,8 @@ class SheetsStore:
             raise TrackerError(f"Backup {backup} is gone; nothing to restore.")
         saved = json.loads(path.read_text(encoding="utf-8"))
         _, now, current = self._read()
-        changes = [{**c, "old": c["new"], "new": c["old"]} for c in saved["cells"]]
-        for c in changes:   # dates come back from JSON as text; write them as dates again
-            if isinstance(c["new"], str) and re.fullmatch(r"\d{4}-\d{2}-\d{2}", c["new"]):
-                c["new"] = datetime.fromisoformat(c["new"])
+        changes = [{**c, "old": c["new"], "old_kind": c["new_kind"], "new": c["old"], "new_kind": c["old_kind"]}
+                   for c in saved["cells"]]
         safety = self._backup(changes, now)
         self._apply(changes, current["sheets"], "new")
         return safety.name, self._read()[1]

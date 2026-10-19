@@ -36,7 +36,7 @@ from openpyxl.worksheet.cell_range import MultiCellRange
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .config import Config
-from .stores import ConflictError, Store, TrackerError, open_store
+from .stores import ConflictError, Store, TrackerError, UnverifiedWrite, open_store
 
 __all__ = ["ConflictError", "Tracker", "TrackerError", "dropdown_values", "parse_date"]
 
@@ -93,8 +93,10 @@ def dropdown_values(ws: Worksheet, col: int) -> list[str] | None:
         if f in wb.defined_names:
             f = wb.defined_names[f].attr_text
         sheet_name, _, ref = f.rpartition("!")
+        sheet_name = sheet_name.strip("'")
+        sheet_name = getattr(wb, "tracker_titles", {}).get(sheet_name, sheet_name)
         try:
-            sheet = wb[sheet_name.strip("'")] if sheet_name else ws
+            sheet = wb[sheet_name] if sheet_name else ws
             cells = sheet[ref.replace("$", "")]
         except (KeyError, ValueError):
             return None
@@ -248,9 +250,10 @@ class Tracker:
     def _sheet(self, wb: Workbook) -> Worksheet:
         if self.store.single_sheet:
             return wb.worksheets[0]
-        if self.cfg.sheet not in wb.sheetnames:
+        name = getattr(wb, "tracker_titles", {}).get(self.cfg.sheet, self.cfg.sheet)  # Google titles
+        if name not in wb.sheetnames:
             raise TrackerError(f"Sheet «{self.cfg.sheet}» not found. Sheets: {', '.join(wb.sheetnames)}")
-        return wb[self.cfg.sheet]
+        return wb[name]
 
     def _load(self) -> tuple[Workbook, Worksheet, Layout, str]:
         """Read once: the workbook and its version come from the same read."""
@@ -727,6 +730,9 @@ class Tracker:
             raise TrackerError("No writes to undo")
         if entries[-1]["tool"] == "undo_last_write" and entries[-1].get("undid") == entry["at"]:
             raise TrackerError("The last write is already undone")
+        if entry.get("unverified"):
+            raise TrackerError("The last write could not be checked after it was sent, so undo cannot tell "
+                               f"what to restore safely. The old values are in {entry['backup']}.")
         current = self.version()
         if current != entry["version_after"] or (expected_version and expected_version != current):
             raise ConflictError("The tracker changed after that write; undo would lose those changes. "
@@ -768,7 +774,13 @@ class Tracker:
                 result["note"] = "Nothing to change"
             return result
 
-        backup, after = self.store.save(wb, before, lambda saved: self._verify(saved, changes))
+        try:
+            backup, after = self.store.save(wb, before, lambda saved: self._verify(saved, changes))
+        except UnverifiedWrite as e:   # Google Sheets: sent, but not read back
+            self._audit({"tool": tool, "row": row, "changes": result["changes"], "layout": layout_notes,
+                         "backup": e.backup, "version_before": before, "version_after": None,
+                         "unverified": str(e)})
+            raise
         self._audit({"tool": tool, "row": row, "changes": result["changes"],
                      "layout": layout_notes, "backup": backup,
                      "version_before": before, "version_after": after})
@@ -906,7 +918,9 @@ class Tracker:
     def _grow_layout(self, wb: Workbook, ws: Worksheet, lay: Layout, new_row: int) -> list[str]:
         """Stretch dropdowns, the filter and the summary sheet's formulas to cover new_row."""
         notes = []
-        for dv in ws.data_validations.dataValidation:
+        # Only cell values reach a Google Sheet, so its dropdowns are not stretched here
+        # (Sheets dropdowns usually cover the whole column anyway).
+        for dv in ws.data_validations.dataValidation if self.store.kind != "gsheet" else []:
             ranges = list(dv.sqref.ranges)
             grown = False
             for rng in ranges:
@@ -930,7 +944,7 @@ class Tracker:
             for row in wb[summary].iter_rows():
                 for cell in row:
                     f = cell.value
-                    if isinstance(f, str) and f.startswith("="):
+                    if isinstance(f, str) and f.startswith("=") and cell.data_type == "f":
                         new_f = pattern.sub(lambda m: m.group(1) + str(max(int(m.group(2)), new_row + 100))
                                             if int(m.group(2)) < new_row else m.group(0), f)
                         if new_f != f:

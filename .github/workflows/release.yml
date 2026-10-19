@@ -25,7 +25,7 @@ jobs:
           test "$(jq -r .version server.json)" = "$v"
           test "$(jq -r '.packages[0].version' server.json)" = "$v"
           test "$(jq -r .version mcpb/manifest.json)" = "$v"
-          grep -q "^## $v" CHANGELOG.md
+          awk -v v="$v" '$1 == "##" && $2 == v {found = 1} END {exit !found}' CHANGELOG.md
       - name: Tests
         run: |
           uv sync --frozen
@@ -97,6 +97,6 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           v="${GITHUB_REF_NAME#v}"
-          awk -v v="$v" '/^## /{p = index($0, "## " v) == 1; next} p' CHANGELOG.md > notes.md
+          awk -v v="$v" '/^## /{p = ($2 == v); next} p' CHANGELOG.md > notes.md
           gh release create "$GITHUB_REF_NAME" --title "tracker-mcp $v" --notes-file notes.md \
             artifacts/mcpb/*.mcpb artifacts/dist/*

@@ -103,18 +103,18 @@ def _stamp(path: Path) -> tuple[int, int] | None:
 _generated: dict[str, Any] | None = None
 
 
-def _first_run(path: str) -> dict[str, Any]:
+def _first_run(path: str, cfg_file: Path) -> dict[str, Any]:
     """No config yet, e.g. the server was installed as a Claude Desktop extension and
     nobody ran `tracker-mcp init`: write the guess `init` would write, so the server
     starts. describe_tracker then shows the file and what to check in it."""
     from .scaffold import init
     try:
-        target, g, _ = init(path)
+        target, g, _ = init(path, out=cfg_file)
     except TrackerError as e:
         raise ConfigError(f"There is no config for {path} yet, and the server could not write one: {e}") from e
-    except OSError as e:
+    except Exception as e:  # any failed guess: say why instead of a bare traceback
         raise ConfigError(f"There is no config for {path} yet, and the server could not write one "
-                          f"({e}). Run `tracker-mcp init {path}`.") from e
+                          f"({type(e).__name__}: {e}). Run `tracker-mcp init {path}`.") from e
     print(f"tracker-mcp: no config found; wrote {target} from the tracker's headers", file=sys.stderr)
     return {"file": str(target), "check_by_hand": g.checks,
             "note": "Written by the server on first start from the tracker's headers. Tell the user where "
@@ -126,7 +126,7 @@ def make_tracker(first_run: bool = True) -> Tracker:
     path, explicit = os.environ["TRACKER_PATH"], os.environ.get("TRACKER_CONFIG")
     cfg_file = config_path(path, explicit)
     if first_run and not explicit and not cfg_file.exists():
-        _generated = _first_run(path)
+        _generated = _first_run(path, cfg_file)
     stamp = _stamp(cfg_file)   # taken before reading: an edit during the read is seen next time
     t = Tracker(path, config=load_config(path, explicit), backup_dir=os.environ.get("TRACKER_BACKUP_DIR"))
     _watch = (cfg_file, stamp)

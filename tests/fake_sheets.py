@@ -34,8 +34,17 @@ class FakeSheets:
             return None
         return EPOCH + timedelta(days=v[0]) if v[1] else v[0]
 
-    def set(self, title: str, r: int, c: int, value) -> None:   # someone else edits the sheet
+    def set(self, title: str, r: int, c: int, value, kind: str | None = None) -> None:
+        """Someone edits the sheet in the browser. kind "stringValue" makes "=..." text."""
         self.sheets[title]["cells"][(r, c)] = (value, False)
+        if kind:
+            self.sheets[title].setdefault("kinds", {})[(r, c)] = kind
+        else:
+            self.sheets[title].get("kinds", {}).pop((r, c), None)
+
+    def kind(self, title: str, r: int, c: int) -> str | None:
+        """How the last write stored the cell: "stringValue", "formulaValue", ..."""
+        return self.sheets[title].get("kinds", {}).get((r, c))
 
     def __call__(self, method: str, url: str, body: dict | None) -> dict:
         self.calls.append((method, url))

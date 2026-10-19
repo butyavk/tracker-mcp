@@ -12,7 +12,9 @@ def test_versions_and_names_match():
     server = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
     manifest = json.loads((ROOT / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
     assert server["version"] == server["packages"][0]["version"] == manifest["version"] == version
-    assert f"## {version}" in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    headings = [line.split()[1] for line in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
+                if line.startswith("## ")]
+    assert version in headings
     # The registry accepts the PyPI package only if its README names the server.
     assert f"mcp-name: {server['name']}" in (ROOT / "README.md").read_text(encoding="utf-8")
 

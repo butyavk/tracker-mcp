@@ -7,8 +7,10 @@ vulnerability* on this repository), not in a public issue.
 
 ## Threat model
 
-tracker-mcp runs on your computer, started by your MCP client over stdio. It has no
-network listener. What it can reach:
+tracker-mcp runs on your computer, started by your MCP client over stdio. It does
+not listen on the network; the one exception is `tracker-mcp auth google`, which
+waits on 127.0.0.1 for Google's redirect during sign-in, ignores any request that
+does not carry its random state, and gives up after five minutes. What it can reach:
 
 - **Your tracker** (`TRACKER_PATH`) and its config: read on every call, written only
   through the write tools.
@@ -18,8 +20,8 @@ network listener. What it can reach:
   `spreadsheets` scope. With your own account that scope covers every spreadsheet
   you can open, although the server opens only the one in `TRACKER_PATH`. A service
   account limits it to the sheets you share with it. The sign-in is a refresh token
-  in `~/.tracker-mcp/google-token.json` (readable only by you on macOS and Linux);
-  treat it like a password.
+  in `~/.tracker-mcp/google-token.json`, created readable by you only (macOS and
+  Linux), like the folder with the Sheets backups; treat it like a password.
 
 No telemetry. The only outgoing connections are to Google, for a Sheets tracker.
 
@@ -36,8 +38,9 @@ No telemetry. The only outgoing connections are to Google, for a Sheets tracker.
   above stops an injected write even if the model is fooled. `evals/` includes a
   scenario with an injected note.
 - **Formula injection.** Text the server writes stays text: `stringValue` in Google
-  Sheets, a string cell in .xlsx, and in CSV a leading apostrophe for text that
-  starts like a formula.
+  Sheets (each cell's kind is read with it, and only a cell that already holds a
+  formula is written as one), a string cell in .xlsx, and in CSV a leading
+  apostrophe for text that starts like a formula.
 - **Lost data.** A backup before every write; writes refused while Excel has the
   file open, when the tracker changed since the read, or when openpyxl would drop
   parts of the workbook; every write verified before it replaces the original;
