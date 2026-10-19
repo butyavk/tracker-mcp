@@ -15,7 +15,9 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any
 
-from .tracker import _ANY_DATE, Layout, TrackerError, company_key, date_in_text, weekday_or_monday
+from openpyxl.cell.cell import MergedCell
+
+from .tracker import _ANY_DATE, Layout, TrackerError, company_key, date_in_text, undid, weekday_or_monday
 
 if TYPE_CHECKING:
     from openpyxl.worksheet.worksheet import Worksheet
@@ -27,6 +29,7 @@ NOFIX = object()
 KINDS = {
     "date_as_text": "A date kept as text or as a bare number: Excel cannot sort or filter it as a date",
     "bad_date": "Not a readable date in a date column",
+    "date_with_text": "A date followed by other text in a date column: split it by hand, so nothing is lost",
     "no_status": "No status: the row drops out of status filters and counts",
     "unknown_status": "A status that is not in the dropdown (or spelled differently)",
     "weekend_followup": "A follow-up date on a weekend; the follow-up rule moves them to Monday",
@@ -38,11 +41,18 @@ KINDS = {
     "duplicate": "The same company and role on two rows",
 }
 
-# Clauses of a response cell that describe the application being received, not a reply.
-_CONFIRMATION = re.compile(
-    r"автоподтвержд|подтвержд|автописьм|confirm|received your|we.ve received|we have received"
-    r"|thank(s| you) for (applying|your (application|interest))|application (was )?received|получили",
+# Clauses of a response cell about the application itself (submitted, received, an
+# auto-reply), not a reply from the company.
+_NOT_A_REPLY = re.compile(
+    r"автоподтвержд|автоответ|автописьм|экранное подтвержд|подтвержден\w*\s+(от|заявк|подач|получен|по почте)"
+    r"|^\W*подтвержд|auto.?(reply|confirm|response)|acknowledg|confirm\w*\s+(of |that )?(your |the )?"
+    r"(application|receipt|submission)|application confirm|received your|we.ve received|we have received"
+    r"|thank(s| you) for (applying|your (application|interest))|application (was )?received|получили"
+    r"|\b(applied|submitted|sent (my|the|an?) (cv|application|resume))\b|подал(ся|ась|и)?\b|подан[аоы]?\b"
+    r"|подача|отправ\w* (cv|резюме|заявк)",
     re.IGNORECASE)
+# A date cell that is only a date: ISO (with an optional time), dd.mm.yyyy, or a serial.
+_WHOLE_DATE = re.compile(r"\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?|\d{1,2}\.\d{1,2}\.\d{4}|\d{5}")
 
 
 @dataclass
@@ -59,20 +69,34 @@ class Issue:
         return self.fix is not NOFIX
 
 
-def reply_dates_from_audit(t: Tracker) -> dict[int, date]:
-    """Rows whose first reply status was set through this server, and the day it was set."""
+def reply_dates_from_audit(t: Tracker, labels: dict[int, str]) -> dict[int, date]:
+    """Rows whose first reply status was set through this server, and the day it was set.
+    An entry counts only if it names the row as it is now (`labels`: row -> "Company —
+    Role"; rows move when the sheet is sorted) and was not undone later."""
+    entries = t._audit_entries()
+    undos = [e for e in entries if e.get("tool") == "undo_last_write"]
     out: dict[int, date] = {}
-    for e in t._audit_entries():
-        if e.get("tool") != "set_status" or e.get("unverified"):
+    for e in entries:
+        if e.get("tool") != "set_status" or e.get("unverified") or any(undid(u, e) for u in undos):
             continue
         for ch in e.get("changes", []):
-            if ch.get("field") == "status" and t._is_reply(ch.get("new")) and not t._is_reply(ch.get("old")):
+            row = int(ch.get("row", 0))
+            if (ch.get("field") == "status" and t._is_reply(ch.get("new")) and not t._is_reply(ch.get("old"))
+                    and (e.get("labels") or {}).get(str(row), (e.get("labels") or {}).get(row)) == labels.get(row)
+                    and row in labels):
                 try:
-                    day = datetime.fromisoformat(e["at"]).date()
+                    out.setdefault(row, datetime.fromisoformat(e["at"]).date())
                 except (KeyError, ValueError):
                     continue
-                out.setdefault(int(ch["row"]), day)
     return out
+
+
+def _parses(text: str, fmt: str) -> bool:
+    try:
+        datetime.strptime(text, fmt)
+        return True
+    except ValueError:
+        return False
 
 
 def reply_date_hint(t: Tracker, rec: dict[str, Any], audit_day: date | None) -> tuple[date | None, str | None]:
@@ -84,11 +108,11 @@ def reply_date_hint(t: Tracker, rec: dict[str, Any], audit_day: date | None) -> 
     text = str(rec.get("response") or "")
     found = []
     for clause in re.split(r";|\||\.\s|\n", text):
-        if _CONFIRMATION.search(clause):
+        if _NOT_A_REPLY.search(clause):
             continue
         for m in _ANY_DATE.finditer(clause):
             d = date_in_text(m.group(1), today, applied)
-            if d and (applied is None or d >= applied):
+            if d and (applied is None or d > applied):   # a reply comes after the submit day
                 found.append((d, clause.strip()))
     if found:
         d, evidence = min(found, key=lambda x: x[0])
@@ -103,7 +127,8 @@ def find_issues(t: Tracker, ws: Worksheet, lay: Layout) -> list[Issue]:
     today = t.today()
     allowed = t._allowed_statuses(ws, lay)
     by_fold = {s.casefold(): s for s in allowed}
-    audit_days = reply_dates_from_audit(t) if cfg.has("replied_on") else {}
+    audit_days = (reply_dates_from_audit(t, {r: t._label(ws, lay, r) for r in lay.rows()})
+                  if cfg.has("replied_on") else {})
     seen: dict[tuple[str, str], int] = {}
     out: list[Issue] = []
 
@@ -113,6 +138,8 @@ def find_issues(t: Tracker, ws: Worksheet, lay: Layout) -> list[Issue]:
     for r in lay.rows():
         if ws.cell(r, lay.cols["company"]).value in (None, ""):
             continue
+        if any(isinstance(ws.cell(r, c), MergedCell) for c in lay.cols.values()):
+            continue   # a merged separator or heading row, not an application
         rec = t._record(ws, lay, r)
         raw_status = ws.cell(r, lay.cols["status"]).value
         status = str(raw_status).strip() if raw_status not in (None, "") else None
@@ -124,9 +151,14 @@ def find_issues(t: Tracker, ws: Worksheet, lay: Layout) -> list[Issue]:
                 if v in (None, "") or isinstance(v, (datetime, date)) or str(v).strip() == cfg.values.no_date:
                     continue
                 d = t._date(v)
-                if d:
+                whole = isinstance(v, (int, float)) or _WHOLE_DATE.fullmatch(str(v).strip()) or any(
+                    _parses(str(v).strip(), fmt) for fmt in cfg.values.date_formats)
+                if d and whole:
                     out.append(Issue("date_as_text", r, f, v, f"«{v}» is kept as text or a number, not a date",
                                      fix=d))
+                elif d:
+                    out.append(Issue("date_with_text", r, f, v, f"«{v}»: a date with more text after it; move "
+                                                                "the text to the notes and leave the date"))
                 else:
                     out.append(Issue("bad_date", r, f, v, f"«{v}» is not a date the server can read; "
                                                           "fix it by hand or add its format to values.date_formats"))
@@ -134,18 +166,24 @@ def find_issues(t: Tracker, ws: Worksheet, lay: Layout) -> list[Issue]:
         # status
         if status is None:
             flag = rec.get("applied")
-            applied = (flag is True or str(flag or "").strip().casefold() == cfg.values.yes.casefold()
-                       or (not cfg.has("applied") and t._date(rec.get("applied_on")) is not None))
+            flag_text = str(flag).strip().casefold() if flag not in (None, "") else ""
+            has_date = t._date(rec.get("applied_on")) is not None
+            if flag is True or flag_text == cfg.values.yes.casefold():
+                applied, why = True, "the applied column"
+            elif flag is False or flag_text == cfg.values.no.casefold():
+                applied, why = False, "the applied column"
+            else:
+                applied, why = has_date, "the submit date" if has_date else "no submit date"
             new = word(st.applied if applied else st.not_applied)
-            out.append(Issue("no_status", r, "status", None,
-                             f"no status; «{new}» from the {'applied column' if cfg.has('applied') else 'submit date'}",
-                             fix=new))
+            out.append(Issue("no_status", r, "status", None, f"no status; «{new}» from {why}", fix=new))
         elif status.casefold() not in by_fold:
             alias = t.aliases.get(status.casefold())
             fix = alias if alias in allowed else NOFIX
             out.append(Issue("unknown_status", r, "status", status,
                              f"«{status}» is not in the dropdown" + (f"; it means «{alias}»" if fix is not NOFIX
                                                                      else "; pick one with set_status"), fix=fix))
+            if fix is not NOFIX:
+                status = alias   # the later checks see what the status means
         elif status != by_fold[status.casefold()]:
             out.append(Issue("unknown_status", r, "status", status,
                              f"spelled differently from the dropdown («{by_fold[status.casefold()]}»)",

@@ -219,7 +219,9 @@ def describe_plan(tool: str, plan: dict[str, Any]) -> str:
                 if str(ch["row"]) != str(row):
                     continue
                 old, new = ch["old"], ch["new"]
-                if isinstance(old, str) and isinstance(new, str) and old and new.startswith(old):
+                if old not in (None, "") and str(old) == str(new):
+                    lines.append(f"  {ch['field']}: «{_short(old)}» (text) → {_short(new)} (a date)")
+                elif isinstance(old, str) and isinstance(new, str) and old and new.startswith(old):
                     lines.append(f"  {ch['field']}: + {_short(new[len(old):].lstrip(' |'))}")
                 else:
                     lines.append(f"  {ch['field']}: {_short(old)} → {_short(new)}")
@@ -323,10 +325,12 @@ def followups_due(
 
 @tool("Stale applications", READ)
 def stale_applications(
-    days: Annotated[int, Field(ge=1, description="Submitted at least this many days ago")] = 30,
+    days: Annotated[int, Field(ge=1, description="Silent at least this many days")] = 30,
 ) -> dict[str, Any]:
-    """Applications still waiting for a reply: a waiting status, submitted `days`+ days
-    ago, and no follow-up planned for today or later. These are what close_stale closes."""
+    """Applications still waiting for a reply: a waiting status, silent for `days`+ days
+    since the last touch (the submit date or the newest dated follow-up log entry, not
+    counting moved or dropped follow-ups), and no follow-up planned for today or later.
+    These are what close_stale closes."""
     return call("stale_applications", days)
 
 
@@ -383,7 +387,7 @@ def reply_times(
 
 @tool("Match e-mails to applications", READ)
 def match_emails(
-    messages: Annotated[list[dict[str, str]], Field(
+    messages: Annotated[list[dict[str, str | None]], Field(
         max_length=200, description="E-mails from the user's mailbox, each {from, subject, date, snippet}: "
                                     "the sender as in the From header, the date as ISO or RFC 2822, a few "
                                     "hundred characters of the body")],
@@ -720,7 +724,7 @@ def calendar_cli(argv: list[str]) -> int:
         return 2
     try:
         res = make_tracker(first_run=False).export_calendar(a.out, a.days)
-    except (ConfigError, TrackerError) as e:
+    except (ConfigError, TrackerError, OSError) as e:
         print(f"tracker-mcp: {e}", file=sys.stderr)
         return 2
     print(f"Wrote {res['file']}: {res['events']} follow-up(s), {res['overdue_on_today']} overdue (put on today).")

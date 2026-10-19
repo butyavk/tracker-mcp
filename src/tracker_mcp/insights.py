@@ -30,13 +30,25 @@ def _stats(days: list[int]) -> dict[str, Any]:
             "p75_days": round(q[2], 1), "max_days": max(days)}
 
 
+def _label(rec: dict[str, Any]) -> str:
+    company, role = str(rec.get("company") or "").strip(), str(rec.get("role") or "").strip()
+    return f"{company} — {role}" if role else company
+
+
 def reply_times(t: Tracker, by: str | None = None, since: date | None = None) -> dict[str, Any]:
     t._need("applied_on")
-    recs, version = t.records(full=bool(by and not t.cfg.has(by) and by != "month"))
-    if by and by != "month" and not t.cfg.has(by):
+    other = bool(by and by != "month" and not t.cfg.has(by))
+    if other:
+        _, _, lay, _ = t._load()
+        mapped = set(lay.cols.values())
+        if by not in [h for c, h in lay.headers.items() if c not in mapped]:
+            raise TrackerError(f"Cannot group by «{by}». Options: month, "
+                               + ", ".join(f for f in t.cfg.columns if f not in ("company", "role", "notes")))
+    recs, version = t.records(full=other)
+    if other:
         for r in recs:
             r[by] = r.get("other", {}).get(by)
-    audit = {} if t.cfg.has("replied_on") else reply_dates_from_audit(t)
+    audit = {} if t.cfg.has("replied_on") else reply_dates_from_audit(t, {r["row"]: _label(r) for r in recs})
     today = t.today()
     rows: list[tuple[dict[str, Any], date, date | None, bool]] = []   # rec, applied, replied, any reply
     unknown = 0
@@ -46,6 +58,8 @@ def reply_times(t: Tracker, by: str | None = None, since: date | None = None) ->
             continue
         replied = t._date(rec.get("replied_on")) if t.cfg.has("replied_on") else audit.get(rec["row"])
         any_reply = t._furthest(rec) >= 0
+        if not any_reply and rec["status"] in t.closed and rec["status"] != t.cfg.statuses.no_response:
+            continue   # withdrawn or closed without a reply: not known how long it stayed silent
         if any_reply and replied is None:
             unknown += 1
             continue
@@ -110,7 +124,7 @@ def followup_events(t: Tracker, days: int = 60) -> tuple[list[dict[str, Any]], s
             lines.append(str(rec["link"]))
         if rec.get("followup_log"):
             lines.append(f"Log: …{str(rec['followup_log'])[-200:]}")
-        key = f"{t.store.label}|{rec['company']}|{rec.get('role')}"
+        key = f"{t.store.label}|{rec['company']}|{rec.get('role')}|{rec.get('num') or rec['row']}"
         events.append({"uid": hashlib.sha256(key.encode()).hexdigest()[:24] + "@tracker-mcp",
                        "date": (today if overdue else due).isoformat(), "due": due.isoformat(),
                        "overdue": overdue, "row": rec["row"], "title": ("Overdue " if overdue else "") + title,
@@ -120,6 +134,7 @@ def followup_events(t: Tracker, days: int = 60) -> tuple[list[dict[str, Any]], s
 
 
 def _ics_text(s: str) -> str:
+    s = s.replace("\r\n", "\n").replace("\r", "\n")
     return s.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
 
 
@@ -153,7 +168,8 @@ def to_ics(events: list[dict[str, Any]], name: str = "Job follow-ups") -> str:
 def default_calendar_path(t: Tracker) -> Path:
     if t.path is not None:
         return t.path.with_name(f"{t.path.stem}.followups.ics")
-    return t.backup_dir.parent / f"{t.backup_dir.name}.followups.ics"
+    from .gsheets import home_dir  # a Google Sheet: next to its config in ~/.tracker-mcp
+    return home_dir() / f"{getattr(t.store, 'id', 'tracker')}.followups.ics"
 
 
 def export_calendar(t: Tracker, path: str | Path | None = None, days: int = 60) -> dict[str, Any]:

@@ -30,6 +30,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from openpyxl.cell.cell import MergedCell
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook.workbook import Workbook
 from openpyxl.worksheet.cell_range import MultiCellRange
@@ -129,7 +130,7 @@ def company_key(name: Any) -> str:
 
 
 _LEAD_DATE = re.compile(r"^\W{0,3}(\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}(?:\.\d{2,4})?)(?!\d)")
-_ANY_DATE = re.compile(r"(?<![\d.])(\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}(?:\.\d{4})?)(?![\d])")
+_ANY_DATE = re.compile(r"(?<![\w.])(\d{4}-\d{2}-\d{2}|\d{1,2}\.\d{1,2}(?:\.\d{4})?)(?![\d])")
 
 
 def date_in_text(token: str, not_after: date, not_before: date | None = None) -> date | None:
@@ -137,11 +138,13 @@ def date_in_text(token: str, not_after: date, not_before: date | None = None) ->
     latest such date that is not after `not_after`, and not before `not_before`)."""
     try:
         if re.fullmatch(r"\d{4}-\d{2}-\d{2}", token):
-            return date.fromisoformat(token)
+            d = date.fromisoformat(token)
+            return d if d <= not_after and (not_before is None or d >= not_before) else None
         parts = [int(p) for p in token.split(".")]
         if len(parts) == 3:
             y = parts[2] + 2000 if parts[2] < 100 else parts[2]
-            return date(y, parts[1], parts[0])
+            d = date(y, parts[1], parts[0])
+            return d if d <= not_after and (not_before is None or d >= not_before) else None
         for year in (not_after.year, not_after.year - 1):
             d = date(year, parts[1], parts[0])
             if d <= not_after and (not_before is None or d >= not_before):
@@ -174,6 +177,15 @@ class Layout:
 
 
 # ---------------------------------------------------------------- tracker
+
+
+def undid(undo: dict[str, Any], entry: dict[str, Any]) -> bool:
+    """Whether an undo entry of the audit log undid this write. The backup name is unique
+    per write; the time (to the second) is what older logs have."""
+    if undo.get("undid_backup"):
+        return undo["undid_backup"] == entry.get("backup")
+    return undo.get("undid") == entry.get("at")
+
 
 class Tracker:
     def __init__(self, target: str | Path, *, config: Config, backup_dir: str | Path | None = None,
@@ -217,8 +229,8 @@ class Tracker:
         old = str(old).strip() if old is not None else ""
         return f"{old}{self.cfg.values.separator}{text}" if old else text
 
-    def _stamp(self, text: str) -> str:
-        return f"{self.today().strftime(self.cfg.values.stamp_format)}: {text.strip()}"
+    def _stamp(self, text: str, on: date | None = None) -> str:
+        return f"{(on or self.today()).strftime(self.cfg.values.stamp_format)}: {text.strip()}"
 
     def _fmt(self, d: date) -> str:
         return d.strftime(self.cfg.values.stamp_format)
@@ -587,10 +599,19 @@ class Tracker:
         if not text:
             return []
         sep = self.cfg.values.separator.strip() or "|"
+        msg = self.cfg.messages
+        # the server's own "moved" and "dropped" entries say nothing was sent: not a touch
+        quiet = [t.split("{")[0].strip().casefold() for t in (msg.followup_moved, msg.followup_dropped)]
+        quiet = [q for q in quiet if len(q) >= 4]
         out = []
         for entry in re.split(rf"{re.escape(sep)}|\n", str(text)):
             m = _LEAD_DATE.match(entry)
-            if m and (d := date_in_text(m.group(1), self.today(), not_before)):
+            if not m:
+                continue
+            rest = entry[m.end():].lstrip(" :—–-").casefold()
+            if any(rest.startswith(q) for q in quiet):
+                continue
+            if d := date_in_text(m.group(1), self.today(), not_before):
                 out.append(d)
         return out
 
@@ -773,9 +794,9 @@ class Tracker:
                 if followup_on or current_fu in (None, ""):
                     fu = followup_on or self._next_date(day, cfg.followups.first_after_days)
                     self._set(ws, lay, row, "followup_on", fu, changes)
-                    self._log(ws, lay, row, msg.applied_with_followup.format(date=self._fmt(fu)), changes)
+                    self._log(ws, lay, row, msg.applied_with_followup.format(date=self._fmt(fu)), changes, on=day)
                 else:
-                    self._log(ws, lay, row, msg.applied, changes)
+                    self._log(ws, lay, row, msg.applied, changes, on=day)
             if note and cfg.has("notes"):
                 self._set(ws, lay, row, "notes",
                           self._append(ws.cell(row, lay.cols["notes"]).value, self._stamp(note)), changes)
@@ -800,6 +821,7 @@ class Tracker:
                 raise TrackerError("For a new submission use mark_applied: it also sets "
                                    "the date and the follow-up date.")
             changes: list[Change] = []
+            had_reply = self._furthest(self._record(ws, lay, row)) >= 0
             self._set(ws, lay, row, "status", st, changes)
             if cfg.has("reached"):  # the furthest stage only moves forward
                 cell = ws.cell(row, lay.cols["reached"]).value
@@ -807,13 +829,15 @@ class Tracker:
                 known = old is not None or cell in (None, "")   # never overwrite a word we cannot read
                 if new is not None and known and (old is None or new > old):
                     self._set(ws, lay, row, "reached", self._stage_word(ws, lay, new), changes)
-            if cfg.has("replied_on") and self._is_reply(st):
+            # the first reply only: a row that had one already keeps an empty date for
+            # check_tracker to fill from what the row says, not today's date
+            if cfg.has("replied_on") and self._is_reply(st) and not had_reply:
                 if ws.cell(row, lay.cols["replied_on"]).value in (None, ""):
                     self._set(ws, lay, row, "replied_on", on or self.today(), changes)
             for key, text in (("response", response), ("notes", note)):
                 if text and cfg.has(key):
                     self._set(ws, lay, row, key,
-                              self._append(ws.cell(row, lay.cols[key]).value, self._stamp(text)), changes)
+                              self._append(ws.cell(row, lay.cols[key]).value, self._stamp(text, on)), changes)
             if cfg.has("followup_on"):
                 fu = self._date(ws.cell(row, lay.cols["followup_on"]).value)
                 if st in self.closed and fu and fu >= self.today():
@@ -876,7 +900,7 @@ class Tracker:
         entry = next((e for e in reversed(entries) if e["tool"] != "undo_last_write"), None)
         if entry is None:
             raise TrackerError("No writes to undo")
-        if entries[-1]["tool"] == "undo_last_write" and entries[-1].get("undid") == entry["at"]:
+        if entries[-1]["tool"] == "undo_last_write" and undid(entries[-1], entry):
             raise TrackerError("The last write is already undone")
         if entry.get("unverified"):
             raise TrackerError("The last write could not be checked after it was sent, so undo cannot tell "
@@ -888,7 +912,8 @@ class Tracker:
         if dry_run:
             return {"dry_run": True, "would_undo": entry, "version": current}
         safety, after = self.store.restore(entry["backup"])
-        self._audit({"tool": "undo_last_write", "undid": entry["at"], "row": entry["row"],
+        self._audit({"tool": "undo_last_write", "undid": entry["at"], "undid_backup": entry.get("backup"),
+                     "row": entry["row"],
                      "changes": [], "backup": safety,
                      "version_before": current, "version_after": after})
         return {"undone": entry, "backup_of_state_before_undo": str(self.backup_dir / safety), "version": after}
@@ -931,7 +956,7 @@ class Tracker:
                          "backup": e.backup, "version_before": before, "version_after": None,
                          "unverified": str(e)})
             raise
-        self._audit({"tool": tool, "row": row, "changes": result["changes"],
+        self._audit({"tool": tool, "row": row, "changes": result["changes"], "labels": result["labels"],
                      "layout": layout_notes, "backup": backup,
                      "version_before": before, "version_after": after})
         result.update(backup=str(self.backup_dir / backup), version=after)
@@ -965,11 +990,12 @@ class Tracker:
 
     # ---- writing: helpers
 
-    def _log(self, ws: Worksheet, lay: Layout, row: int, text: str, changes: list[Change]) -> None:
+    def _log(self, ws: Worksheet, lay: Layout, row: int, text: str, changes: list[Change],
+             on: date | None = None) -> None:
         if not self.cfg.has("followup_log"):
             return
         old = ws.cell(row, lay.cols["followup_log"]).value
-        self._set(ws, lay, row, "followup_log", self._append(old, self._stamp(text)), changes)
+        self._set(ws, lay, row, "followup_log", self._append(old, self._stamp(text, on)), changes)
 
     def _set(self, ws: Worksheet, lay: Layout, row: int, key: str, new: Any, changes: list[Change]) -> None:
         self._set_cell(ws.cell(row, lay.cols[key]), row, key, new, changes)
@@ -979,12 +1005,19 @@ class Tracker:
         self._set_cell(ws.cell(row, col), row, key, new, changes)
 
     def _set_cell(self, cell, row: int, key: str, new: Any, changes: list[Change]) -> None:
+        if isinstance(cell, MergedCell):
+            raise TrackerError(f"Row {row}, {key}: the cell is part of a merged range; unmerge it in the "
+                               "spreadsheet to write there.")
         old = cell.value
         if isinstance(new, date):
             if self._date(old) == new and isinstance(old, datetime):
                 return
             cell.value = datetime(new.year, new.month, new.day)
-            cell.number_format = "yyyy-mm-dd"
+            cell.number_format = self._date_format(cell)
+            if old not in (None, "") and not isinstance(old, (datetime, date)):
+                # text or a number becoming a date: show what was there, not its reading
+                changes.append(Change(row, key, old, new))
+                return
         else:
             new = self._as_text(new)
             if old == new:
@@ -993,6 +1026,16 @@ class Tracker:
             if isinstance(new, str) and new.startswith("="):
                 cell.data_type = "s"   # text from the model stays text, never a formula
         changes.append(Change(row, key, self._show(old, key), new))
+
+    @staticmethod
+    def _date_format(cell) -> str:
+        """The number format of the column's other dates, so a fixed date looks like them."""
+        cells = getattr(cell.parent, "_cells", {})   # existing cells only: reading must not create any
+        for (r, c), other in cells.items():
+            if c == cell.column and r != cell.row and isinstance(other.value, datetime) \
+                    and other.number_format not in ("General", None):
+                return other.number_format
+        return "yyyy-mm-dd"
 
     def _as_text(self, value: Any) -> Any:
         """A CSV file has no cell types: Excel runs anything that looks like a formula

@@ -11,7 +11,7 @@ the suggestions; every write still needs the user's yes.
 from __future__ import annotations
 
 import re
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from email.utils import parseaddr, parsedate_to_datetime
 from typing import TYPE_CHECKING, Any
 
@@ -50,13 +50,23 @@ _TOOL_NAMES = re.compile(r"^(ashby|greenhouse|lever|workable|teamtailor|smartrec
 _NAME_SUFFIX = re.compile(r"\s*(?:talent|recruiting|recruitment|careers?|hiring|people|hr|jobs|team"
                           r"|acquisition|via\s+\w+)(\s+(team|acquisition))?\s*$", re.IGNORECASE)
 
+# A rejection said outright, and words that only hint at one ("unfortunately" also
+# starts "unfortunately we need to move your interview").
+_REJECT_STRONG = (r"not (be )?(moving|move) forward with (you|your)|decided (not )?to (move|proceed|go) (forward )?"
+                  r"with other|with other candidates|not (be )?(progressing|proceeding) with|regret to inform"
+                  r"|will not be (moving|taking) (you|your)|position has been filled|not been selected|not selected"
+                  r"|decided not to (move|proceed|progress)|unable to (offer|move forward)|вынуждены отказать"
+                  r"|не готовы (продолжить|предложить)|решили не продолжать|отказ")
+_REJECT_WEAK = r"unfortunately|other candidates|no longer (considering|available)|к сожалению|не готовы"
 KIND_PATTERNS = [   # checked in this order: a rejection often also thanks for applying
-    ("rejection", r"unfortunately|not (be )?(moving|move) forward|decided to (move|proceed) (forward )?with other"
-                  r"|other candidates|not (be )?(progressing|proceeding)|regret to inform|will not be (moving|taking)"
-                  r"|position has been filled|no longer (considering|available)|not selected|decided not to"
-                  r"|к сожалению|не готовы|вынуждены отказать|отказ"),
-    ("offer", r"\boffer letter\b|pleased to (extend|offer)|job offer|we.d like to offer|оффер|предложение о работе"),
-    ("interview", r"(schedule|book|arrange|set up|find) (a |an |the |your )?(time|call|interview|chat|meeting|slot)"
+    ("rejection", f"{_REJECT_STRONG}|{_REJECT_WEAK}"),
+    ("offer", r"\boffer letter\b|job offer|offer of employment|pleased to (extend|make) (you )?an offer"
+              r"|(we.d|we would) like to (extend|make) (you )?an offer"
+              r"|pleased to offer you (the|this) (role|position|job)"
+              r"|(?<!пригла)оффер|предложение о работе"),
+    ("interview", r"reschedul\w*|schedul\w* (a |an |the |your )?(call|interview|chat|meeting|time|slot)"
+                  r"|move (your|the) (interview|call)|\bslots?\b"
+                  r"|(book|arrange|set up|find) (a |an |the |your )?(time|call|interview|chat|meeting|slot)"
                   r"|invite you to|invitation to (an? )?(interview|call|chat)|interview (invitation|invite|request)"
                   r"|would (like|love) to (speak|talk|chat|meet)|your availability|calendly\.com|take.?home"
                   r"|(technical|coding|online) (test|task|assessment)|next step (is|would be) an? (call|interview)"
@@ -75,24 +85,29 @@ def _domain_company(sender: str) -> str | None:
         return None
     labels = [x for x in domain.split(".") if x not in ("mail", "email", "jobs", "careers", "recruiting",
                                                        "hr", "noreply", "no-reply", "notifications")]
+    if len(labels) >= 3 and labels[-2] in ("co", "com", "org", "net", "ac", "gov", "edu"):   # acme.co.uk
+        return labels[-3]
     return labels[-2] if len(labels) >= 2 else None
 
 
-def _candidates(msg: dict[str, Any]) -> list[str]:
-    out = []
+def _candidates(msg: dict[str, Any]) -> list[tuple[str, bool]]:
+    """Names the message gives the company, each with whether it may match by its first
+    words (subject phrases, the sender's domain) or only exactly (the sender's name,
+    which is as often a person's: "Adeel Khan" must not find "Deel")."""
+    out: list[tuple[str, bool]] = []
     subject = str(msg.get("subject") or "")
     snippet = str(msg.get("snippet") or "")
     for text in (subject, snippet[:400]):
         for pat in _COMPANY_IN_TEXT:
             for m in re.finditer(pat, text, re.IGNORECASE):
                 c = re.sub(r"\s+(team|and|for the|for)\b.*$", "", m.group("c").strip(), flags=re.IGNORECASE)
-                out.append(c)
+                out.append((c, True))
     name = parseaddr(str(msg.get("from") or ""))[0]
     if name and not _TOOL_NAMES.match(name.strip()):
-        out.append(_NAME_SUFFIX.sub("", name).strip())
+        out.append((_NAME_SUFFIX.sub("", name).strip(), False))
     if d := _domain_company(str(msg.get("from") or "")):
-        out.append(d)
-    return [c for c in out if len(company_key(c)) >= 2]
+        out.append((d, True))
+    return [(c, loose) for c, loose in out if len(company_key(c)) >= 2]
 
 
 _MAYBE = re.compile(r"\b(if|will|we.ll|may|might|could|should|once|when)\b[^.!?\n]{0,60}$", re.IGNORECASE)
@@ -102,9 +117,16 @@ def classify(msg: dict[str, Any]) -> str:
     text = f"{msg.get('subject') or ''}\n{msg.get('snippet') or ''}"
     patterns = dict(KIND_PATTERNS)
     confirmation = re.search(patterns["confirmation"], text, re.IGNORECASE)
+    interview = re.search(patterns["interview"], text, re.IGNORECASE)
     for kind, pat in KIND_PATTERNS:
         m = re.search(pat, text, re.IGNORECASE)
         if not m:
+            continue
+        # with an interview in the message, only an outright rejection is one
+        if kind == "rejection" and interview and not re.search(_REJECT_STRONG, text, re.IGNORECASE):
+            continue
+        # "an offer to interview" is an invitation, not an offer
+        if kind == "offer" and re.search(r"offer(ing)? you (a|an|the) (interview|call|slot|chat|time)", text, re.I):
             continue
         # "Thanks for applying; if there is a match, we will schedule a call" is a confirmation
         if kind == "interview" and confirmation and _MAYBE.search(text[:m.start()]):
@@ -113,34 +135,54 @@ def classify(msg: dict[str, Any]) -> str:
     return "other"
 
 
-def _msg_date(value: Any) -> date | None:
-    if not value:
+def _msg_date(value: Any, today: date) -> date | None:
+    """The day an e-mail came, in this computer's time zone: ISO, RFC 2822 (the Date
+    header) or epoch milliseconds (Gmail's internalDate). Never later than today."""
+    if value in (None, ""):
         return None
     s = str(value).strip()
-    try:
-        return date.fromisoformat(s[:10])
-    except ValueError:
-        pass
-    try:
-        return parsedate_to_datetime(s).date()
-    except (TypeError, ValueError, IndexError):
-        pass
-    try:
-        return datetime.fromisoformat(s).date()
-    except ValueError:
-        return None
+    when: datetime | date | None = None
+    if s.isdigit() and len(s) >= 12:
+        when = datetime.fromtimestamp(int(s) / 1000, tz=UTC)
+    if when is None:
+        try:
+            when = datetime.fromisoformat(s.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+    if when is None:
+        try:
+            when = parsedate_to_datetime(s)
+        except (TypeError, ValueError, IndexError):
+            pass
+    if when is None:
+        try:
+            when = date.fromisoformat(s[:10])
+        except ValueError:
+            return None
+    if isinstance(when, datetime):
+        when = (when.astimezone() if when.tzinfo else when).date()
+    return min(when, today)
 
 
-def _match_rows(names: list[str], companies: dict[str, list[dict[str, Any]]]) -> tuple[str | None, list]:
-    """The tracker company a candidate name refers to: same key, or one key containing
-    the other (at least 4 characters), so "Swap Commerce" finds "Swap"."""
-    for name in names:
-        key = company_key(name)
-        if key in companies:
+def _words(name: str) -> list[str]:
+    name = re.sub(r"\(.*?\)|\[.*?\]", " ", str(name)).casefold()
+    return [w for w in re.split(r"[\W_]+", name) if w]
+
+
+def _match_rows(names: list[tuple[str, bool]], companies: dict[str, list[dict[str, Any]]],
+                words: dict[str, list[str]]) -> tuple[str | None, list]:
+    """The tracker company a name refers to: the same name, or (for subject phrases and
+    domains) one name's words starting the other's: "Aios Medical" finds "AIOS",
+    "bunny" finds "bunny.net", but "Swapnil" does not find "Swap"."""
+    for name, _ in names:
+        if (key := company_key(name)) in companies:
             return name, companies[key]
-    for name in names:
-        key = company_key(name)
-        hits = [k for k in companies if len(min(k, key, key=len)) >= 4 and (k in key or key in k)]
+    for name, loose in names:
+        if not loose:
+            continue
+        mine = _words(name)
+        hits = [k for k, theirs in words.items() if theirs and mine and len("".join(min(theirs, mine, key=len))) >= 4
+                and (mine[:len(theirs)] == theirs or theirs[:len(mine)] == mine)]
         if len(hits) == 1:
             return name, companies[hits[0]]
     return None, []
@@ -149,21 +191,32 @@ def _match_rows(names: list[str], companies: dict[str, list[dict[str, Any]]]) ->
 def match(t: Tracker, messages: list[dict[str, Any]]) -> dict[str, Any]:
     recs, version = t.records()
     companies: dict[str, list[dict[str, Any]]] = {}
+    words: dict[str, list[str]] = {}
     for rec in recs:
-        companies.setdefault(company_key(rec["company"]), []).append(rec)
+        key = company_key(rec["company"])
+        companies.setdefault(key, []).append(rec)
+        words.setdefault(key, _words(rec["company"]))
+    today = t.today()
     st = t.cfg.statuses
     screening = next(iter(st.stages.values()), [None])[0] if st.stages else None
     out = []
     for i, msg in enumerate(messages):
+        if not isinstance(msg, dict):
+            out.append({"message": i, "kind": "other", "rows": [], "error": "not an object with from/subject/date"})
+            continue
         kind = classify(msg)
-        day = _msg_date(msg.get("date"))
+        day = _msg_date(msg.get("date"), today)
         names = _candidates(msg)
-        name, rows = _match_rows(names, companies)
-        item: dict[str, Any] = {"message": i, "kind": kind, "company_in_mail": name or (names[0] if names else None),
+        name, rows = _match_rows(names, companies, words)
+        item: dict[str, Any] = {"message": i, "kind": kind,
+                                "company_in_mail": name or (names[0][0] if names else None),
                                 "date": day.isoformat() if day else None,
                                 "rows": [{**t._brief(r)} for r in rows]}
-        # the suggestion: only for a single open row whose state the message changes
-        open_rows = [r for r in rows if r["status"] not in t.closed]
+        # the suggestion: only for a single open row whose state the message changes. A row
+        # closed for no response is open to news: a late reply is what reply_times needs.
+        late = kind in ("rejection", "interview", "offer")
+        open_rows = [r for r in rows if r["status"] not in t.closed
+                     or (late and r["status"] == st.no_response)]
         target = open_rows[0] if len(open_rows) == 1 else None
         sugg = None
         if not rows and kind in ("confirmation", "interview", "rejection", "offer"):

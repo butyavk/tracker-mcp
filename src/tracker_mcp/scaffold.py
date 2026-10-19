@@ -60,8 +60,8 @@ FIELD_PATTERNS: list[tuple[str, str]] = [
                          r"|^contact|recruiter|hiring manager|контакт|^кому"),
     ("followup_log", r"(follow.?up|фоллоу.?ап).*(log|status|history|notes|статус|лог|истори)"
                      r"|^(log|history|история|лог)$"),
-    ("replied_on", r"(date|when|дата).*(repl|respon|answer|ответ)"
-                   r"|(repl|respon|answer|ответ).*(date|\bon\b|when|дата|получен)"),
+    ("replied_on", r"^(replied|responded|answered) on\b|(date|when|дата).*(repl|respon|answer|ответ)"
+                   r"|(repl|respon|answer|ответ).*(date|дата)"),
     ("applied_on", r"(date|when|дата).*(appl|submit|sent|подач|отклик|отправ)"
                    r"|(appl|submit|sent|подан|отклик).*(date|\bon\b|when|дата)"),
     ("applied", r"^(applied|submitted|sent|подался|подалась|подано|откликнулся|отправлено)\s*\??$"),
@@ -301,7 +301,7 @@ def guess(path: str | Path, sheet: str | None = None) -> Guess:
 
     # Text dates: find the format, report what no format reads.
     date_formats: list[str] = []
-    texts = [str(v).strip() for f in ("applied_on", "followup_on") if f in fields
+    texts = [str(v).strip() for f in ("applied_on", "followup_on", "replied_on") if f in fields
              for v in values(fields[f][0]) if isinstance(v, str)]
     if texts:
         date_formats, failed, notes = _date_formats(texts, lang)
