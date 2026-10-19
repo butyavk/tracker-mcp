@@ -304,6 +304,7 @@ class Tracker:
     def unavailable(self) -> dict[str, str]:
         """Tools that cannot work on this layout, and the column each one misses."""
         need = {"followups_due": ["followup_on"], "log_followup": ["followup_on", "followup_log"],
+                "reschedule_followup": ["followup_on"],
                 "stale_applications": ["applied_on"], "close_stale": ["applied_on"]}
         out = {}
         for tool, fields in need.items():
@@ -466,7 +467,7 @@ class Tracker:
         if not text:
             return "(empty)"
         low = text.casefold()
-        for name, parts in self.cfg.funnel.groups.items():
+        for name, parts in self.cfg.funnel.by.get(by, self.cfg.funnel.groups).items():
             if any(p.casefold() in low for p in parts):
                 return name
         # free text such as "Ashby (direct form), filled in by hand" -> "Ashby"
@@ -732,6 +733,33 @@ class Tracker:
             return row, changes, []
 
         return self._write("log_followup", mutate, expected_version, dry_run)
+
+    def reschedule_followup(self, row: int, on: date | None, reason: str, *,
+                            expected_version: str | None = None, dry_run: bool = False) -> dict[str, Any]:
+        """Move the next follow-up to another date, or plan none (on=None) while the
+        application stays open: nobody to write to yet, waiting for LinkedIn credits,
+        the company promised an answer by a date. Nothing was sent, so nothing is
+        counted as a follow-up; the reason goes to the follow-up log."""
+        self._need("followup_on")
+        cfg = self.cfg
+        if not reason.strip():
+            raise TrackerError("Say why the follow-up moves; the reason goes to the follow-up log.")
+        if on is not None and on < self.today():
+            raise TrackerError(f"{on.isoformat()} is in the past; pick today or a later date.")
+
+        def mutate(wb: Workbook, ws: Worksheet, lay: Layout):
+            self._check_row(ws, lay, row)
+            status = ws.cell(row, lay.cols["status"]).value
+            if status in self.closed:
+                raise TrackerError(f"Row {row} is closed ({status}); it has no follow-ups to move.")
+            changes: list[Change] = []
+            self._set(ws, lay, row, "followup_on", on if on is not None else cfg.values.no_date, changes)
+            text = (cfg.messages.followup_moved.format(date=self._fmt(on), reason=reason.strip()) if on
+                    else cfg.messages.followup_dropped.format(reason=reason.strip()))
+            self._log(ws, lay, row, text, changes)
+            return row, changes, []
+
+        return self._write("reschedule_followup", mutate, expected_version, dry_run)
 
     def undo_last_write(self, expected_version: str | None = None, dry_run: bool = False) -> dict[str, Any]:
         """Restore the backup of the last write, only if nothing changed since."""

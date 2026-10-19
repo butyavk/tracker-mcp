@@ -13,7 +13,13 @@ Added
   tracker), `example` (every config key explained), `--tracker`, `--config`,
   `--backup-dir`, `--version`.
 - `funnel`: submitted → replied → screening → interview → offer, by channel, source,
-  month or any column; an optional `reached` column keeps the furthest stage.
+  month or any column; an optional `reached` column keeps the furthest stage, and
+  `[funnel.by.<column>]` groups one column's free text. `init` flags a tracker
+  without a furthest-stage column.
+- `reschedule_followup`: move the next follow-up, or plan none, when nothing was sent
+  (no contact yet, waiting for message credits), with the reason in the log.
+- The `new` template: Location, Salary, Priority and Next step columns; "Found via"
+  and "Applied via" instead of the easily confused Source and Channel.
 - Prompts (weekly review, draft a follow-up) and resources (`tracker://layout`,
   `tracker://application/{row}`); titles on the server and every tool.
 - `date_formats` for dates kept as text (US and UK formats are detected by `init`).

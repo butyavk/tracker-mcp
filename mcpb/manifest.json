@@ -50,6 +50,7 @@
     {"name": "mark_applied", "description": "Record a submission and plan the follow-up (asks you first)"},
     {"name": "set_status", "description": "Change a status (asks you first)"},
     {"name": "log_followup", "description": "Record a sent follow-up, plan the next one (asks you first)"},
+    {"name": "reschedule_followup", "description": "Move or drop a follow-up when nothing was sent (asks you first)"},
     {"name": "close_stale", "description": "Close applications with no reply (asks you first)"},
     {"name": "undo_last_write", "description": "Undo the server's last write (asks you first)"}
   ],

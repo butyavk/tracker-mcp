@@ -466,6 +466,32 @@ def log_followup(
                   approval, dry_run=dry_run, confirm=confirm)
 
 
+def _ask_reschedule(ctx: Context, row: int, on: date | None, reason: str,
+                    expected_version: str | None = None, dry_run: bool = False):
+    return ask(ctx, "reschedule_followup", (row, on, reason), {},
+               expected_version=expected_version, dry_run=dry_run)
+
+
+@tool("Move or drop a follow-up", EDIT)
+def reschedule_followup(
+    ctx: Context,
+    approval: Annotated[Approval, Resolve(_ask_reschedule)],
+    row: Row,
+    on: Annotated[date | None, Field(description="New follow-up date; null for no follow-up while the "
+                                                 "application stays open")],
+    reason: Annotated[str, Field(description="Why, in a few words; appended to the follow-up log")],
+    expected_version: Version = None,
+    dry_run: DryRun = False,
+    confirm: Confirm = None,
+) -> dict[str, Any]:
+    """Move the next follow-up to another date, or plan none, when nothing was sent:
+    no one to write to yet, waiting for message credits, the company promised an answer
+    by a date. Use log_followup instead when a follow-up was actually sent, and
+    set_status to close an application."""
+    return finish(ctx, "reschedule_followup", (row, on, reason), {}, approval,
+                  dry_run=dry_run, confirm=confirm)
+
+
 def _ask_stale(ctx: Context, days: int = 30, rows: list[int] | None = None,
                expected_version: str | None = None, dry_run: bool = False):
     return ask(ctx, "close_stale", (days,), dict(rows=rows),
@@ -532,7 +558,8 @@ def weekly_review() -> str:
     return inspect.cleandoc("""
         Review my job search for this week with the tracker tools.
         1. describe_tracker, then followups_due(within_days=7): what is due or overdue, with the
-           contact and the last line of the follow-up log.
+           contact and the last line of the follow-up log. For one that cannot be sent now (no
+           contact, waiting for credits), propose reschedule_followup with a date or none.
         2. stale_applications(days=30): applications that look dead. Do not close anything; list
            them and ask me which to close.
         3. funnel(by="month") and funnel(): how the reply rate and the share reaching a screening

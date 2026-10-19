@@ -25,14 +25,16 @@ def test_csv_tracker_end_to_end(tmp_path):
     book, cfg = new_tracker(tmp_path / "jobs.csv")
     t = Tracker(book, config=load_config(book), today=lambda: TODAY)
     assert t.describe()["kind"] == "csv" and t.describe()["data_rows"] == "none yet"
-    t.add_application("Acme", "EM", extra={"Source": "LinkedIn"})
+    t.add_application("Acme", "EM", extra={"Found via": "LinkedIn"})
     t.mark_applied(2, channel="Ashby (direct form)")
     t.set_status(2, "Interview", response="call on Monday")
-    rows = list(csv.reader(book.open(encoding="utf-8")))
-    assert rows[1][:4] == ["1", "Acme", "EM", ""] and rows[1][6] == "2026-10-18"   # dates as yyyy-mm-dd
-    assert rows[1][8] == "Interview" and rows[1][9] == "Interview"                # status and furthest stage
+    head, row = list(csv.reader(book.open(encoding="utf-8")))[:2]
+    got = dict(zip(head, row, strict=True))
+    assert (got["#"], got["Company"], got["Found via"]) == ("1", "Acme", "LinkedIn")
+    assert got["Applied on"] == "2026-10-18"                                    # dates as yyyy-mm-dd
+    assert got["Status"] == got["Furthest stage"] == "Interview"
     t.undo_last_write()
-    assert list(csv.reader(book.open(encoding="utf-8")))[1][8] == "Applied"
+    assert dict(zip(head, list(csv.reader(book.open(encoding="utf-8")))[1], strict=True))["Status"] == "Applied"
     assert t.funnel()["total"]["applied"] == 1
 
 
@@ -153,7 +155,8 @@ def test_describe_tells_what_is_missing(tmp_path):
     assert any("no follow-up date column" in c for c in g.checks)
     d = Tracker(path, config=load_config(path)).describe()
     assert d["other_headers"] == ["Location"]
-    assert set(d["unavailable_tools"]) == {"followups_due", "log_followup", "stale_applications", "close_stale"}
+    assert set(d["unavailable_tools"]) == {"followups_due", "log_followup", "reschedule_followup",
+                                           "stale_applications", "close_stale"}
     f = Tracker(path, config=load_config(path)).funnel("Location")
     assert f["groups"][0]["group"] == "Remote"
 

@@ -34,7 +34,8 @@ def test_init_rebuilds_my_hand_written_config(tmp_path):
            (h.statuses.not_applied, h.statuses.applied, h.statuses.no_response)
     assert a.statuses.rejected == ["Отказ"] and a.statuses.stages == h.statuses.stages
     assert (a.values, a.messages, a.summary_sheet) == (h.values, h.messages, "Сводка")
-    assert ("Гейт — спросить первым" in [hd for _, hd in g.unmapped]) and not g.checks
+    assert "Гейт — спросить первым" in [hd for _, hd in g.unmapped]
+    assert [c for c in g.checks if "furthest-stage" not in c] == []   # my tracker has no such column
 
 
 def test_init_on_a_sheet_without_dropdowns(tmp_path):

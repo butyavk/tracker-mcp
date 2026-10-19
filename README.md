@@ -3,24 +3,45 @@
 <!-- mcp-name: io.github.butyavk/tracker-mcp -->
 
 An MCP server for the spreadsheet where you track your job applications: Excel,
-CSV or Google Sheets. Connect it to Claude (or any MCP client) and ask:
+CSV or Google Sheets. Connect it to Claude (or any MCP client), and the assistant
+keeps the tracker for you: it answers from it, reminds you what is due, and records
+what happened, with your yes for every change.
 
-- "Which follow-ups are due this week?"
-- "What's the status with Acme? When did I apply?"
-- "Which channel gets me the most replies: referrals, LinkedIn or direct forms?"
-- "How many applications did I send in October?"
+> **You:** Which follow-ups are due this week?
+>
+> **Claude:** Three. Acme (applied 17 Sep): nudge Sarah Kim on LinkedIn, overdue by
+> two days. Globex: due Thursday, no contact yet. Initech: due Friday.
+>
+> **You:** I can't reach anyone at Globex until Monday. Move it.
+>
+> **Claude:** Row 8 · Globex — Head of Engineering. Follow-up date: 23 Oct → 27 Oct;
+> follow-up log: + "follow-up moved to 2026-10-27: no contact yet". Write it?
+>
+> **You:** Yes.
+>
+> **Claude:** Done. A backup was taken first; say "undo" to revert.
 
-Claude can also record what happened: "I applied to Globex via LinkedIn today",
-"Initech rejected me", "close everything that hasn't answered in 45 days". You see
-every change before it is made, and nothing is written without your yes.
+Also: "Which channel gets me the most replies?", "Initech rejected me", "I applied to
+Hooli via a referral today", "close everything that hasn't answered in 45 days".
 
-Your spreadsheet stays yours. You keep opening it in Excel or Sheets, sorting it
-and editing it; the server works around that. Nothing about a particular tracker
-is in the code: the server reads your headers and dropdowns and keeps what it
-learned in a small config file that you can edit.
+### Why not just give Claude the spreadsheet?
 
-I built it for my own job search, a tracker with a hundred-odd applications in
-Russian, and generalized it so it works with yours.
+Claude can already read a spreadsheet you attach, and its Google Drive connector can
+open your Sheets. tracker-mcp adds what a job search needs on top:
+
+- **Rules, not guesses.** Follow-up dates by your rule (10 days after applying, then
+  every 14, weekends moved to Monday), applications that went silent, and a funnel
+  (submitted → replied → screening → interview → offer) by channel, source or month
+  that remembers the furthest stage an application reached.
+- **Safe writes.** You see the exact cells that will change, and the server, not the
+  model, checks your yes. A backup before every write, an audit log, undo; nothing is
+  written while Excel has the file open or after someone else changed it.
+- **Always there.** The same tracker in every chat and every session, with no upload,
+  so several conversations (or a scheduled weekly review) can keep one tracker up to date.
+
+Your spreadsheet stays yours: you keep opening it in Excel or Sheets, sorting and
+editing it. Nothing about a particular tracker is in the code; the server reads your
+headers and dropdowns and keeps what it learned in a small config file.
 
 ## Quick start
 
@@ -86,6 +107,17 @@ uvx tracker-mcp --check --tracker ~/Documents/job-tracker.xlsx   # how the confi
 No tracker yet? `uvx tracker-mcp new ~/Documents/job-tracker.xlsx` creates an empty
 one with dropdowns, a filter, a summary sheet and its config.
 
+### A weekly routine
+
+The server answers when asked; it does not send reminders. Two habits make it pay off:
+
+- **Once a week**, run the **Weekly review** prompt (or just ask "review my job search
+  for this week"): what is due, what went silent, how the funnel moves, and a plan. If
+  your client can run scheduled tasks, schedule that sentence for Monday morning.
+- **After each event**, tell Claude in a sentence: "applied to X via Y", "X rejected
+  me", "sent the follow-up to X", "can't follow up with X until Friday". It finds the
+  row, shows the change and writes it when you say yes.
+
 ## Where your tracker can live
 
 | | How to point to it | Notes |
@@ -141,6 +173,7 @@ permission covers all of them; if that matters, use a service account.
 | `mark_applied` | write | Submitted: date, channel, status, follow-up date by your rule |
 | `set_status` | write | New status from your dropdown; a closed status cancels the pending follow-up |
 | `log_followup` | write | Log a sent follow-up, schedule the next one or close |
+| `reschedule_followup` | write | Move the next follow-up, or plan none, when nothing was sent (no contact yet, waiting for credits) |
 | `close_stale` | write | Close stale applications (or chosen rows) in one write, one backup, one undo step |
 | `undo_last_write` | write | Restore the state before the last write, if nothing changed since |
 
@@ -154,42 +187,24 @@ overwrite cells, and all of them take `dry_run`, `expected_version` and `confirm
 
 ## How a write stays safe
 
-1. **You confirm, and the server enforces it.** A "please ask first" line in the
-   instructions only works if the model follows it, so the yes is checked on the
-   server. Before the tool runs, the server computes the plan, the exact cell
-   changes (field, old → new), at the current version of the tracker:
-   - If the client can show a dialog (MCP elicitation), the server asks you there,
-     with the plan as the message. A decline writes nothing.
-   - Otherwise the write needs `confirm`: the token from a dry run of the same call.
-     The token fingerprints the changes and the version, so a token from another
-     preview, or from before the tracker changed, does not match.
-
-   Either way, what lands in the tracker is exactly what was approved, or nothing.
-   Just before writing, the plan is computed once more: if it no longer matches
-   what you saw, nothing is written. `[safety] confirm_writes = false` turns this off.
-2. **Optimistic concurrency.** Each read returns a `version`: a hash of the file's
-   bytes, or of a Google Sheet's values. A write with `expected_version` is refused if
-   the tracker changed since, like HTTP `If-Match`.
-3. **Excel has the file open?** Then the write is refused (lock files `~$…`,
-   `.~lock.…#`): Excel's next save would overwrite it.
-4. **Write, verify, swap.** A file is saved to a temporary copy, re-read and checked
-   cell by cell, then backed up and atomically renamed over the original. A Google
-   Sheet gets one `batchUpdate` with only the changed cells, is read back and checked,
-   and is restored if anything differs.
-5. **Audit and undo.** One JSON line per write: tool, row, changes, backup. Undo
-   works only if the tracker still matches the state right after that write, so it
-   never wipes someone else's edit.
-6. **Your data is data.** Text written by the server stays text: a note starting with
-   `=` never becomes a formula, and a formula you keep in a cell is written back as a
-   formula on undo. The server's instructions tell the model never to
-   follow instructions found in cells, such as a pasted job post. See
-   [SECURITY.md](SECURITY.md) for the threat model.
+1. **The server checks your yes.** Before a write it computes the plan, the exact
+   cell changes at the current version of the tracker. A client with confirmation
+   dialogs (MCP elicitation) shows it to you there; otherwise the write needs the
+   token of a dry run that you saw, which fingerprints the changes and the version.
+   The write lands exactly as approved, or not at all.
+2. **Nobody's edit is lost.** Each read returns a `version` (a hash of the file, or of
+   the sheet's values); a write against an old version is refused, and so is a write
+   while Excel has the file open.
+3. **Write, check, keep a backup.** Files are written to a temporary copy, re-read
+   cell by cell, backed up and swapped in atomically; a Google Sheet gets one update
+   of the changed cells, is read back and rolled back on any difference.
+4. **Audit and undo**: one line per write; undo only if nothing changed since.
+5. **Your data is data**: text never turns into a formula, and the model is told not
+   to follow instructions found in cells (a pasted job post). See [SECURITY.md](SECURITY.md).
 
 Allowed statuses come from the status column's dropdown. Columns are found by
 header text, not by letter, so you can reorder them. When a row is added to an
-.xlsx file, the server extends the dropdowns, the filter and the summary sheet's
-formulas to it; in Google Sheets, the summary formulas (dropdowns there usually
-cover the whole column already).
+.xlsx file, the server stretches dropdowns, the filter and summary formulas to it.
 
 ## Config
 
@@ -233,12 +248,12 @@ key is an error, not a silent default. If an edit breaks the config, every reque
 says why until it is fixed.
 
 The funnel counts a rejection as a reply and needs to know your stages
-(`[statuses.stages]`). The status column only holds the current state, so a
-rejection after an interview counts as just a reply, unless you add an optional
-`reached` column for the furthest stage: `set_status` moves it forward, never back.
-Free-text columns such as the channel are grouped by their text up to the first
-bracket or dash ("Ashby (direct form)" → "Ashby"), or by the substrings in
-`[funnel.groups]`.
+(`[statuses.stages]`). The status column only holds the current state, so add a
+`reached` column ("Furthest stage") for the furthest stage, or a rejection after an
+interview counts as just a reply; `set_status` moves it forward, never back.
+Free-text columns such as the source are grouped by their text up to the first
+bracket or dash ("Ashby (direct form)" → "Ashby"), or by substrings you list in
+`[funnel.groups]` (all columns) or `[funnel.by.source]` (one column).
 
 | Variable | Option | |
 |---|---|---|

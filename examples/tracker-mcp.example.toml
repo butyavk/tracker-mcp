@@ -76,6 +76,8 @@ applied = "applied"
 applied_with_followup = "applied, follow-up 1 on {date}"
 followup_cancelled = "follow-up {date} cancelled: {status}"
 stale_closed = "closed: no reply for {days} days"
+followup_moved = "follow-up moved to {date}: {reason}"     # reschedule_followup
+followup_dropped = "no follow-up planned: {reason}"
 
 [funnel.groups]
 # For `funnel(by=...)` over a free-text column. A value goes to the first group
@@ -83,6 +85,12 @@ stale_closed = "closed: no reply for {days} days"
 # bracket or dash: "Ashby (direct form)" -> "Ashby".
 "Referral" = ["referral", "referred", "via a friend"]
 "Recruiter" = ["recruiter", "agency"]
+
+[funnel.by.source]
+# Groups for one column only, used instead of the ones above when grouping by it.
+"LinkedIn" = ["linkedin"]
+"Job boards" = ["hiring.cafe", "himalayas", "wellfound", "remote"]
+"Referral" = ["referral", "referred"]
 
 [safety]
 # Every write needs the user's yes: the client's confirmation dialog (MCP elicitation)

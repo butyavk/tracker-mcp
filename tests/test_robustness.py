@@ -334,3 +334,34 @@ def test_undo_of_a_date_written_over_a_number_restores_the_format(jobs):
     store.restore(backup)
     assert jobs.value("Jobs", 3, 4) == 7 and not jobs.is_date("Jobs", 3, 4)
     assert store.version() == before
+
+
+# ---------------------------------------------------------------- reschedule_followup
+
+def test_reschedule_and_drop_a_follow_up(tmp_path):
+    from .test_tracker import ru_tracker
+    t = ru_tracker(tmp_path / "t.xlsx")
+    due = {a["row"] for a in t.followups_due(60)["due"]}
+    row = sorted(due)[0]
+    later = TODAY.replace(day=28)
+    res = t.reschedule_followup(row, later, "ждём кредиты InMail")
+    assert {c["field"] for c in res["changes"]} == {"followup_on", "followup_log"}
+    app = t.get_application(row=row)["applications"][0]
+    assert app["followup_on"] == later.isoformat() and "перенесён на" in app["followup_log"]
+    t.reschedule_followup(row, None, "контакта нет")
+    assert row not in {a["row"] for a in t.followups_due(60)["due"]}
+    assert t.get_application(row=row)["applications"][0]["followup_log"].endswith("фоллоу-ап снят — контакта нет")
+    with pytest.raises(TrackerError, match="in the past"):
+        t.reschedule_followup(row, TODAY.replace(day=1), "x")
+    with pytest.raises(TrackerError, match="Say why"):
+        t.reschedule_followup(row, later, " ")
+
+
+def test_funnel_groups_for_one_column(tmp_path):
+    from .test_tracker import ru_tracker
+    t = ru_tracker(tmp_path / "t.xlsx")
+    before = t.funnel(by="status")["groups"]
+    assert len(before) > 1
+    t.cfg = t.cfg.model_copy(update={"funnel": t.cfg.funnel.model_copy(update={"by": {"status": {"Всё": [""]}}})})
+    after = t.funnel(by="status")["groups"]
+    assert [g["group"] for g in after] == ["Всё"] and after[0]["applied"] == sum(g["applied"] for g in before)

@@ -69,6 +69,8 @@ class Messages(_Strict):
     applied_with_followup: str = "applied, follow-up 1 on {date}"
     followup_cancelled: str = "follow-up {date} cancelled: {status}"
     stale_closed: str = "closed: no reply for {days} days"
+    followup_moved: str = "follow-up moved to {date}: {reason}"
+    followup_dropped: str = "no follow-up planned: {reason}"
 
 
 class Funnel(_Strict):
@@ -76,6 +78,9 @@ class Funnel(_Strict):
     # first group with a matching substring, otherwise to its own text up to the
     # first bracket or dash: "Ashby (direct form)" -> "Ashby".
     groups: dict[str, list[str]] = {}
+    # The same, for one column only: [funnel.by.source] "LinkedIn" = ["linkedin"].
+    # Used instead of `groups` when grouping by that column.
+    by: dict[str, dict[str, list[str]]] = {}
 
 
 class Safety(_Strict):

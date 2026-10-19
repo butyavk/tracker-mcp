@@ -99,10 +99,14 @@ YES = r"^(yes|y|да|true|1|✓|✔|x)$"
 MESSAGES = {
     "en": {"applied": "applied", "applied_with_followup": "applied, follow-up 1 on {date}",
            "followup_cancelled": "follow-up {date} cancelled: {status}",
-           "stale_closed": "closed: no reply for {days} days"},
+           "stale_closed": "closed: no reply for {days} days",
+           "followup_moved": "follow-up moved to {date}: {reason}",
+           "followup_dropped": "no follow-up planned: {reason}"},
     "ru": {"applied": "подано", "applied_with_followup": "подано, фоллоу-ап 1 — {date}",
            "followup_cancelled": "фоллоу-ап {date} снят — {status}",
-           "stale_closed": "закрыто: {days} дн. без ответа"},
+           "stale_closed": "закрыто: {days} дн. без ответа",
+           "followup_moved": "фоллоу-ап перенесён на {date} — {reason}",
+           "followup_dropped": "фоллоу-ап снят — {reason}"},
 }
 
 
@@ -314,6 +318,10 @@ def guess(path: str | Path, sheet: str | None = None) -> Guess:
                       + " and run init again")
     elif "followup_log" not in fields:
         checks.append("no follow-up log column: log_followup is off. Add a column such as «Follow-up log»")
+    if "reached" not in fields and any(meaning[k] for k in ("screening", "interview", "offer")):
+        checks.append("no furthest-stage column: the funnel sees only today's statuses, so an application "
+                      "rejected after an interview counts as a reply. Add a column such as «Furthest stage» "
+                      "and run init again")
     if "followup_contact" in fields and not re.search(r"follow|фоллоу", fields["followup_contact"][1], re.I):
         checks.append(f"«{fields['followup_contact'][1]}» is used as the follow-up contact: "
                       "log_followup(contact=...) replaces what is there")
@@ -484,12 +492,12 @@ def check(target: str, text: str) -> None:
 
 # ---------------------------------------------------------------- new
 
-TEMPLATE_HEADERS = ["#", "Company", "Role", "Link", "Source", "Applied?", "Applied on", "Channel", "Status",
-                    "Furthest stage", "Response", "Follow-up date", "Follow-up contact", "Follow-up log",
-                    "Notes"]
+TEMPLATE_HEADERS = ["#", "Company", "Role", "Location", "Salary", "Link", "Found via", "Applied on", "Applied via",
+                    "Status", "Furthest stage", "Priority", "Next step", "Response", "Follow-up date",
+                    "Follow-up contact", "Follow-up log", "Notes"]
 TEMPLATE_STATUSES = ["Not applied", "Applied", "Screening", "Interview", "Offer", "Rejected", "Withdrawn",
                      "No response", "Closed"]
-TEMPLATE_WIDTHS = [5, 22, 32, 30, 16, 10, 12, 18, 14, 14, 30, 14, 24, 40, 40]
+TEMPLATE_WIDTHS = [5, 22, 30, 16, 14, 30, 16, 12, 16, 14, 14, 10, 24, 30, 14, 24, 40, 40]
 
 
 def new_tracker(path: str | Path, *, force_config: bool = False) -> tuple[Path, Path]:
@@ -523,14 +531,14 @@ def new_tracker(path: str | Path, *, force_config: bool = False) -> tuple[Path, 
     last = get_column_letter(len(TEMPLATE_HEADERS))
     ws.auto_filter.ref = f"A1:{last}1"
     col = {h: get_column_letter(i) for i, h in enumerate(TEMPLATE_HEADERS, 1)}
-    for header, options in (("Applied?", ["Yes", "No"]), ("Status", TEMPLATE_STATUSES),
-                            ("Furthest stage", ["Screening", "Interview", "Offer"])):
+    for header, options in (("Status", TEMPLATE_STATUSES), ("Furthest stage", ["Screening", "Interview", "Offer"]),
+                            ("Priority", ["High", "Medium", "Low"])):
         dv = DataValidation(type="list", formula1=_q(",".join(options)), allow_blank=True)
         dv.add(f"{col[header]}2:{col[header]}500")
         ws.add_data_validation(dv)
     s = wb.create_sheet("Summary")
     rows = [("Applications", f"=COUNTA(Applications!{col['Company']}2:{col['Company']}500)"),
-            ("Submitted", f'=COUNTIF(Applications!{col["Applied?"]}2:{col["Applied?"]}500,"Yes")'),
+            ("Submitted", f"=COUNT(Applications!{col['Applied on']}2:{col['Applied on']}500)"),
             ("Waiting", f'=COUNTIF(Applications!{col["Status"]}2:{col["Status"]}500,"Applied")'),
             ("Reached an interview", f'=COUNTIF(Applications!{col["Furthest stage"]}2:'
                                      f'{col["Furthest stage"]}500,"Interview")'

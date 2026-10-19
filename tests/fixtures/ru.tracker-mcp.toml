@@ -56,6 +56,8 @@ applied = "подано"
 applied_with_followup = "подано, фоллоу-ап 1 — {date}"
 followup_cancelled = "фоллоу-ап {date} снят — {status}"
 stale_closed = "закрыто: {days} дн. без ответа"
+followup_moved = "фоллоу-ап перенесён на {date} — {reason}"
+followup_dropped = "фоллоу-ап снят — {reason}"
 
 [funnel.groups]
 "По знакомству" = ["знакомств", "реферал", "рекомендац"]
