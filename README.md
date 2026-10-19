@@ -186,9 +186,10 @@ add to your client: the same setup as for a file, with the sheet's URL as `TRACK
   There is no tracker-mcp server; the program talks to Google directly. To withdraw
   access, remove tracker-mcp at [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
   The [privacy policy](https://butyavk.github.io/tracker-mcp/privacy.html) has the details.
-- **On Google's screens** the app may be named by its site, `butyavk.github.io`, rather
-  than "tracker-mcp": Google shows an app's own name only after a brand review that
-  requires a domain of its own. The site is [tracker-mcp's home page](https://butyavk.github.io/tracker-mcp/).
+- **On Google's screens** you sign in "to continue to tracker-mcp", with links to its
+  [home page](https://butyavk.github.io/tracker-mcp/) and privacy policy. Google has not
+  reviewed the app's brand, so it shows no logo; the access it asks for (`drive.file`) is
+  one Google lets apps request without a review.
 - **No browser on that computer** (a server over SSH): `uvx tracker-mcp auth google --no-browser`
   prints the link; the browser must still reach `127.0.0.1` on that computer to finish,
   so forward the port or sign in where the browser is and copy `~/.tracker-mcp/`.

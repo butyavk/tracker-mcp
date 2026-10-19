@@ -4,7 +4,7 @@
   "title": "Job-application tracker",
   "description": "Your job-application tracker in Excel, CSV or Google Sheets: follow-ups, funnel, confirmed writes",
   "version": "0.3.1",
-  "websiteUrl": "https://github.com/butyavk/tracker-mcp",
+  "websiteUrl": "https://butyavk.github.io/tracker-mcp/",
   "repository": {
     "url": "https://github.com/butyavk/tracker-mcp",
     "source": "github"
