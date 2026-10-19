@@ -26,44 +26,46 @@ Hooli via a referral today", "close everything that hasn't answered in 45 days".
 
 ### Why a server? Can't Claude just do this?
 
-Partly it can, and for a one-off question you don't need tracker-mcp: attach the
-spreadsheet and ask. Claude can read a file you attach. With access to your files (Claude
-Code, or Claude working on your computer) it can also edit the file by writing a small
-script. With the Google Drive connector it can open and edit your Sheets. What none of these
-gives you is the same rules and the same safety in every conversation. Here is how they compare:
+It can, if you set it up. Claude reads a spreadsheet you attach, and with access to your
+files (Claude Code, or Claude working in a folder on your computer) or the Google Drive
+connector it can edit the tracker by writing a little code. Give it good instructions
+(where the tracker is, what each column means, how follow-ups are counted, "back up and
+ask me before every write") and it works: tracker-mcp grew out of exactly that setup. The
+difference is where the rules live: in instructions the model reads and follows, or in a
+program that applies them.
 
-| | Attach the file | Claude edits the file itself (file access or the Drive connector) | tracker-mcp |
-|---|---|---|---|
-| Reads your tracker | A copy, uploaded again in each chat | Yes | Yes |
-| Changes your tracker | Hands you a new file to download and swap in | Yes, with code it writes for this one change | Yes, with tested tools that change only the cells they show you |
-| Asks before writing | If the model remembers | If the model remembers | The server refuses any write you have not confirmed |
-| Backup, undo, change log | No | If the model remembers | Every write |
-| Keeps dropdowns, formulas, filters | Not guaranteed | Not guaranteed | Kept, and extended to new rows |
-| Follow-up dates, silent applications, funnel | Worked out again in each chat | Worked out again in each chat | One rule in code: the same answer every time |
-| Excel has the file open, or someone else just changed it | Not noticed | Not noticed | The write is refused |
-| What the model has to read | The whole sheet | The whole sheet, or code to parse it | Only the rows the answer needs |
-| Works in | Any Claude chat | Where Claude can run code on your files | Any MCP client (Claude Desktop, Claude Code, Cursor, ...); not claude.ai in a browser or on a phone |
+| | Claude with your instructions | tracker-mcp |
+|---|---|---|
+| Knows your tracker | From the instructions you wrote, or worked out again in each chat | Learned once from your headers and dropdowns, kept in a config |
+| Follow-up dates, silent applications, funnel | The model writes code for it each time | Fixed rules in tested code: the same answer every time |
+| Asks before writing | When the instructions say so and the model follows them | The server refuses any write you have not confirmed |
+| Backup, undo, change log | When the model makes them | Every write |
+| Dropdowns and formulas on new rows | Depends on the code written for that change | Extended to new rows, every time |
+| Excel has the file open, or it changed meanwhile | Checked if the model thinks of it | The write is refused |
+| Text pasted from job posts and e-mails | Text starting with "=" becomes a formula unless the code prevents it | Always written as text |
+| Each request | Write, run and check a script | One tool call |
+| Free-form analysis, charts, reshaping the sheet | Anything | Not its job: Claude still does that alongside |
+| Where | Where Claude can run code on your files, or on a copy you upload | Any MCP client: Claude Desktop (in a normal chat), Claude Code, Cursor, ...; not in a browser or on a phone |
 
-Why that matters for a job search:
+So tracker-mcp does not give Claude new abilities. It gives the everyday part of a job
+search (record what happened, see what is due, see what works) fixed rules and fixed
+safety, with no instructions to write:
 
 - **Rules belong in code, not in a prompt.** "Which follow-ups are due?" is date
-  arithmetic with your rule: 10 days after applying, then every 14, weekends moved to Monday,
-  nothing for closed applications. A model can do it, but each chat works it out from
-  scratch, and small slips creep in: a follow-up for a rejected application, a date on a
-  Sunday, a status spelled differently from your dropdown. In tracker-mcp the rule is code
-  covered by tests, so every chat and every client gets the same answer. The same goes
-  for silent applications and for the funnel. The funnel remembers the furthest stage an
-  application reached, so an interview still counts after the rejection that followed it.
-- **Safety the model cannot skip.** You see the exact cells that will change before
-  anything is written, and your yes is checked by the server, not taken on the model's
-  word. A backup comes before every write, and you get a change log and undo.
-  The text you paste into notes (job posts, e-mails) cannot turn into a formula or talk the
-  model into writing something you did not approve.
-- **Less to read, so faster and cheaper.** A real tracker of 100 applications and 25
-  columns is about 160,000 characters of text. "Which follow-ups are due in the next three
-  days?" answered through tracker-mcp returned 16 rows, about 10,000 characters.
-- **The same tracker everywhere.** No upload: every chat, a scheduled weekly review and
-  every client you use work on the same file, and each change lands in it right away.
+  arithmetic with your rule: 10 days after applying, then every 14, weekends moved to
+  Monday, nothing for closed applications. A model gets it right most of the time, but it
+  works it out anew in each chat, and the slips are the quiet kind: a follow-up for a
+  rejected application, a date on a Sunday, a status spelled differently from your
+  dropdown. Here the rule is code covered by tests. The same goes for silent applications
+  and the funnel.
+- **Safety the model cannot skip.** You see the exact cells that will change, and your
+  yes is checked by the server, not taken on the model's word. That matters most where no
+  one re-reads the instructions: a scheduled weekly review, a long chat, a note pasted from
+  a job post that tells the model to do something.
+- **Fewer steps.** One tool call instead of writing and running a script, so answers come
+  quicker and the model's attention stays on your question.
+- **The same tracker everywhere.** Every chat, a scheduled review and every client you
+  use work on the same file, and each change lands in it right away.
 
 Your spreadsheet stays yours: you keep opening it in Excel or Sheets, sorting and
 editing it. Nothing about a particular tracker is in the code; the server reads your
@@ -71,7 +73,8 @@ headers and dropdowns and keeps what it learned in a small config file.
 
 You don't need tracker-mcp if you only want a one-time analysis of your applications,
 if you rarely update the tracker, or if you only use Claude in a browser or on your phone
-(a server like this runs on your computer).
+(a server like this runs on your computer). If Claude already keeps your tracker well with
+instructions you wrote, what you gain is reliability, not new features.
 
 ## Quick start
 
