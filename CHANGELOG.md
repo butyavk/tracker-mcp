@@ -1,12 +1,12 @@
 # Changelog
 
-## Unreleased
+## 0.4.3 — 2026-10-20
 
 Changed
 - Without a confirmation dialog, a preview now says, in words the model reads, to show
   it and end the turn, and to use the token only after the user's yes in a new message;
   it also carries the preview text to show. The evals caught a small model previewing
-  and confirming in one turn (1 run of 6).
+  and confirming in one turn (1 run of 6); with the new wording, 0 of 10.
 - Evals print what the model did when a scenario fails, can repeat scenarios, and a
   failed eval fails the job.
 
