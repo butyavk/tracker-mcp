@@ -74,7 +74,7 @@ def test_google_sheet_init_and_writes(sheet, tmp_path):
     res = t.mark_applied(3, channel="Referral")
     assert sheet.value("Jobs", 3, 3) == "Applied"
     assert sheet.value("Jobs", 3, 4) == datetime(2026, 10, 18)              # written as a real date
-    assert sheet.sheets["Jobs"]["cells"][(3, 4)][1] is True
+    assert sheet.is_date("Jobs", 3, 4)
     assert (t.backup_dir / res["backup"].split("/")[-1]).exists()
 
     t.add_application("Initech", "VP", notes="=IMPORTXML(\"http://evil\")")   # text stays text

@@ -31,7 +31,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from .config import ConfigError, config_path, load_config
 from .stores import is_google_sheet, open_store
-from .tracker import Tracker, TrackerError, dropdown_values, parse_date
+from .tracker import Tracker, TrackerError, dropdown_values, parse_date, real_title, sheet_in
 
 # Text date formats init tries when a date column holds text the built-in parser
 # does not read (ISO, dd.mm.yyyy and spreadsheet dates are always read).
@@ -147,8 +147,10 @@ def _headers(ws: Worksheet, row: int) -> dict[int, str]:
 
 
 def _find_header(wb, sheet: str | None) -> tuple[Worksheet, int, dict[str, tuple[int, str]]]:
+    if sheet:
+        sheet = sheet_in(wb, sheet)
     if sheet and sheet not in wb.sheetnames:
-        raise TrackerError(f"No sheet «{sheet}». Sheets: {', '.join(wb.sheetnames)}")
+        raise TrackerError(f"No sheet «{sheet}». Sheets: {', '.join(real_title(w) for w in wb.worksheets)}")
     best = None
     for ws in [wb[sheet]] if sheet else wb.worksheets:
         for r in range(1, min(ws.max_row, 30) + 1):
@@ -283,9 +285,10 @@ def guess(path: str | Path, sheet: str | None = None) -> Guess:
         elif len(meaning[kind]) > 1:
             checks.append(f"statuses.{kind}: several candidates ({', '.join(meaning[kind])}), took the first")
 
-    summary = next((other.title for other in wb.worksheets if other is not ws and any(
-        isinstance(c.value, str) and c.value.startswith("=")
-        and (f"{ws.title}!" in c.value or f"'{ws.title}'!" in c.value)
+    title = real_title(ws)
+    summary = next((real_title(other) for other in wb.worksheets if other is not ws and any(
+        isinstance(c.value, str) and c.value.startswith("=") and c.data_type == "f"
+        and (f"{title}!" in c.value or f"'{title}'!" in c.value)
         for row in other.iter_rows() for c in row)), None)
     lang = "ru" if any(re.search("[а-яё]", h, re.I) for h in headers.values()) else "en"
     mapped = {c for c, _ in fields.values()}
@@ -328,7 +331,7 @@ def guess(path: str | Path, sheet: str | None = None) -> Guess:
         checks[:] = [c for c in checks if not c.startswith(("statuses.not_applied", "statuses.applied (",
                                                              "statuses.no_response"))]
     return Guess(
-        sheet=ws.title, header_row=header_row, rows=len(data_rows),
+        sheet=real_title(ws), header_row=header_row, rows=len(data_rows),
         columns=dict(sorted(fields.items(), key=lambda kv: kv[1][0])),
         unmapped=[(c, h) for c, h in headers.items() if c not in mapped],
         statuses=statuses, statuses_from=statuses_from, meaning=meaning,

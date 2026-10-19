@@ -1,4 +1,9 @@
-"""An in-memory stand-in for the Google Sheets API: the subset gsheets.py uses."""
+"""An in-memory stand-in for the Google Sheets API: the subset gsheets.py uses.
+
+Values and number formats are kept apart, as in Sheets: a write whose field mask
+leaves out the number format keeps the cell's format (a date format stays on a
+cell even when a plain number is written into it).
+"""
 
 from __future__ import annotations
 
@@ -7,44 +12,53 @@ import urllib.parse
 from datetime import datetime, timedelta
 
 EPOCH = datetime(1899, 12, 30)
+DATE = {"type": "DATE", "pattern": "yyyy-mm-dd"}
 
 
 class FakeSheets:
     def __init__(self, sheets: dict[str, list[list]], dropdowns: dict[str, dict[int, list[str]]] | None = None):
-        # title -> {(row, col): (value, is_date)}; rows and cols are 1-based
+        # title -> cells {(row, col): raw value}, dates {(row, col) formatted as a date},
+        # kinds {(row, col): "stringValue" | "formulaValue" | ...}; rows and cols are 1-based
         self.sheets: dict[str, dict] = {}
         for i, (title, rows) in enumerate(sheets.items()):
-            cells = {}
+            cells, dates = {}, set()
             for r, row in enumerate(rows, 1):
                 for c, v in enumerate(row, 1):
                     if v is None:
                         continue
                     if isinstance(v, datetime):
-                        cells[(r, c)] = ((v - EPOCH).days, True)
+                        cells[(r, c)] = (v - EPOCH).days
+                        dates.add((r, c))
                     else:
-                        cells[(r, c)] = (v, False)
-            self.sheets[title] = {"id": 100 + i, "rows": 20, "cols": 26, "cells": cells,
-                                  "lists": (dropdowns or {}).get(title, {})}
+                        cells[(r, c)] = v
+            self.sheets[title] = {"id": 100 + i, "rows": 20, "cols": 26, "cells": cells, "dates": dates,
+                                  "kinds": {}, "lists": (dropdowns or {}).get(title, {})}
         self.calls: list[tuple[str, str]] = []
         self.requests: list[dict] = []
+        self.fail_next_post: Exception | None = None   # raised after the next batchUpdate is applied
 
     def value(self, title: str, r: int, c: int):
-        v = self.sheets[title]["cells"].get((r, c))
-        if v is None:
-            return None
-        return EPOCH + timedelta(days=v[0]) if v[1] else v[0]
+        s = self.sheets[title]
+        v = s["cells"].get((r, c))
+        if isinstance(v, (int, float)) and not isinstance(v, bool) and (r, c) in s["dates"]:
+            return EPOCH + timedelta(days=v)
+        return v
+
+    def is_date(self, title: str, r: int, c: int) -> bool:
+        return (r, c) in self.sheets[title]["dates"]
 
     def set(self, title: str, r: int, c: int, value, kind: str | None = None) -> None:
         """Someone edits the sheet in the browser. kind "stringValue" makes "=..." text."""
-        self.sheets[title]["cells"][(r, c)] = (value, False)
+        s = self.sheets[title]
+        s["cells"][(r, c)] = value
         if kind:
-            self.sheets[title].setdefault("kinds", {})[(r, c)] = kind
+            s["kinds"][(r, c)] = kind
         else:
-            self.sheets[title].get("kinds", {}).pop((r, c), None)
+            s["kinds"].pop((r, c), None)
 
     def kind(self, title: str, r: int, c: int) -> str | None:
         """How the last write stored the cell: "stringValue", "formulaValue", ..."""
-        return self.sheets[title].get("kinds", {}).get((r, c))
+        return self.sheets[title]["kinds"].get((r, c))
 
     def __call__(self, method: str, url: str, body: dict | None) -> dict:
         self.calls.append((method, url))
@@ -57,20 +71,29 @@ class FakeSheets:
             if "appendDimension" in req:
                 sheet = self._by_id(req["appendDimension"]["sheetId"])
                 sheet["rows"] += req["appendDimension"]["length"]
-            else:
-                u = req["updateCells"]
-                sheet = self._by_id(u["range"]["sheetId"])
-                r, c = u["range"]["startRowIndex"] + 1, u["range"]["startColumnIndex"] + 1
-                assert r <= sheet["rows"], "write beyond the grid without appendDimension"
-                data = u["rows"][0]["values"][0]
+                continue
+            u = req["updateCells"]
+            sheet = self._by_id(u["range"]["sheetId"])
+            r, c = u["range"]["startRowIndex"] + 1, u["range"]["startColumnIndex"] + 1
+            assert r <= sheet["rows"], "write beyond the grid without appendDimension"
+            data = u["rows"][0]["values"][0]
+            mask = u["fields"].split(",")
+            if "userEnteredValue" in mask:
                 v = data.get("userEnteredValue")
-                if not v:
+                if v:
+                    sheet["cells"][(r, c)] = next(iter(v.values()))
+                    sheet["kinds"][(r, c)] = next(iter(v))
+                else:
                     sheet["cells"].pop((r, c), None)
-                    continue
-                is_date = data.get("userEnteredFormat", {}).get("numberFormat", {}).get("type") == "DATE"
-                raw = next(iter(v.values()))
-                sheet["cells"][(r, c)] = (raw, is_date)
-                sheet.setdefault("kinds", {})[(r, c)] = next(iter(v))
+                    sheet["kinds"].pop((r, c), None)
+            if "userEnteredFormat.numberFormat" in mask:
+                if data.get("userEnteredFormat", {}).get("numberFormat", {}).get("type") == "DATE":
+                    sheet["dates"].add((r, c))
+                else:
+                    sheet["dates"].discard((r, c))
+        if self.fail_next_post:
+            e, self.fail_next_post = self.fail_next_post, None
+            raise e
         return {}
 
     def _by_id(self, sid: int) -> dict:
@@ -86,16 +109,18 @@ class FakeSheets:
                 values = []
                 for c in range(1, ncols + 1):
                     cell: dict = {}
+                    if (r, c) in s["dates"]:
+                        cell["userEnteredFormat"] = {"numberFormat": DATE}
                     if (r, c) in s["cells"]:
-                        raw, is_date = s["cells"][(r, c)]
+                        raw = s["cells"][(r, c)]
                         if isinstance(raw, bool):
                             cell["userEnteredValue"] = {"boolValue": raw}
                         elif isinstance(raw, (int, float)):
                             cell["userEnteredValue"] = {"numberValue": raw}
-                            if is_date:
-                                cell["effectiveFormat"] = {"numberFormat": {"type": "DATE"}}
+                            if (r, c) in s["dates"]:
+                                cell["effectiveFormat"] = {"numberFormat": DATE}
                         elif isinstance(raw, str) and raw.startswith("=") and \
-                                s.get("kinds", {}).get((r, c)) != "stringValue":
+                                s["kinds"].get((r, c)) != "stringValue":
                             cell["userEnteredValue"] = {"formulaValue": raw}
                         else:
                             cell["userEnteredValue"] = {"stringValue": str(raw)}

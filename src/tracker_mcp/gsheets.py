@@ -58,7 +58,9 @@ TOKEN_URI = "https://oauth2.googleapis.com/token"
 LOGIN_TIMEOUT = 300   # seconds to wait for the browser to come back
 EPOCH = datetime(1899, 12, 30)
 FIELDS = ("properties.title,sheets(properties(sheetId,title,gridProperties(rowCount,columnCount)),"
-          "data(rowData(values(userEnteredValue,effectiveFormat.numberFormat,dataValidation))))")
+          "data(rowData(values(userEnteredValue,userEnteredFormat.numberFormat,effectiveFormat.numberFormat,"
+          "dataValidation))))")
+MAX_TEXT = 32767   # openpyxl keeps no more characters in a cell; Sheets allows 50,000
 
 # A transport takes (method, url, json body or None) and returns the parsed JSON.
 Transport = Callable[[str, str, dict | None], dict]
@@ -318,13 +320,14 @@ def _plain(value: Any) -> Any:
 
 
 def _safe_title(title: str, used: set[str]) -> str:
-    """openpyxl refuses some characters in sheet titles that Google allows ("Q1/Q2")."""
+    """openpyxl refuses some characters in sheet titles that Google allows ("Q1/Q2"),
+    and tells titles apart ignoring case."""
     base = re.sub(r"[\\/*?:\[\]]", "_", title) or "Sheet"
     safe, n = base, 1
-    while safe in used:
+    while safe.casefold() in used:
         n += 1
         safe = f"{base} ({n})"
-    used.add(safe)
+    used.add(safe.casefold())
     return safe
 
 
@@ -352,8 +355,10 @@ class SheetsStore:
         wb.tracker_titles = {}   # Google title -> title in the workbook, read by the tracker
         cells: dict[tuple[str, int, int], Any] = {}
         kinds: dict[tuple[str, int, int], str] = {}
+        formats: dict[tuple[str, int, int], dict] = {}
         sheets: dict[str, dict] = {}
         used: set[str] = set()
+        lossy: list[str] = []
         for sheet in doc.get("sheets", []):
             props = sheet["properties"]
             title = _safe_title(props["title"], used)
@@ -371,8 +376,13 @@ class SheetsStore:
                             target = ws.cell(r, c, value)
                             if kind == "text":
                                 target.data_type = "s"   # "=..." text stays text
-                            cells[(title, r, c)] = value
+                                if len(value) > MAX_TEXT:
+                                    lossy.append(f"cell {target.coordinate} on «{props['title']}» has more than "
+                                                 f"{MAX_TEXT} characters, and the rest would be cut off")
+                            cells[(title, r, c)] = target.value
                             kinds[(title, r, c)] = kind
+                        if fmt := cell.get("userEnteredFormat", {}).get("numberFormat"):
+                            formats[(title, r, c)] = fmt
                         cond = cell.get("dataValidation", {}).get("condition", {})
                         if cond.get("type") == "ONE_OF_LIST" and c not in lists:
                             lists[c] = [v.get("userEnteredValue", "") for v in cond.get("values", [])]
@@ -386,13 +396,13 @@ class SheetsStore:
                 ws.add_data_validation(dv)
         snapshot = {"|".join(map(str, k)): [_plain(v), kinds[k]] for k, v in sorted(cells.items())}
         version = digest(json.dumps(snapshot, sort_keys=True, ensure_ascii=False, default=str).encode())
-        state = {"cells": cells, "kinds": kinds, "sheets": sheets}
+        state = {"cells": cells, "kinds": kinds, "formats": formats, "sheets": sheets, "lossy": lossy}
         self._loaded = {version: state}
         return wb, version, state
 
     def load(self) -> tuple[Workbook, str, list[str]]:
-        wb, version, _ = self._read()
-        return wb, version, []
+        wb, version, state = self._read()
+        return wb, version, state["lossy"]
 
     def version(self) -> str:
         return self._read()[1]
@@ -416,11 +426,13 @@ class SheetsStore:
                     old, old_kind, new_kind = base["cells"].get(key), base["kinds"].get(key, "empty"), _kind(cell)
                     if _plain(cell.value) != _plain(old) or (new_kind != old_kind and new_kind != "empty"):
                         out.append({"sheet": title, "row": cell.row, "col": cell.column,
-                                    "old": old, "old_kind": old_kind, "new": cell.value, "new_kind": new_kind})
+                                    "old": old, "old_kind": old_kind, "old_format": base["formats"].get(key),
+                                    "new": cell.value, "new_kind": new_kind})
             for key, old in base["cells"].items():
                 if key[0] == title and key not in seen:
                     out.append({"sheet": title, "row": key[1], "col": key[2], "old": old,
-                                "old_kind": base["kinds"][key], "new": None, "new_kind": "empty"})
+                                "old_kind": base["kinds"][key], "old_format": base["formats"].get(key),
+                                "new": None, "new_kind": "empty"})
         return out
 
     def _requests(self, changes: list[dict], sheets: dict, side: str, grow: bool) -> list[dict]:
@@ -431,8 +443,17 @@ class SheetsStore:
                 if need > meta["rows"]:
                     reqs.append({"appendDimension": {"sheetId": meta["id"], "dimension": "ROWS",
                                                      "length": need - meta["rows"] + 50}})
+        other = "old" if side == "new" else "new"
         for ch in changes:
             data, fields = _to_api(ch[side], ch[f"{side}_kind"])
+            mine = ch.get(f"{other}_format") if side == "new" else None
+            if ch[f"{side}_kind"] == "date" and mine and mine.get("type") in ("DATE", "DATE_TIME"):
+                data["userEnteredFormat"]["numberFormat"] = mine   # keep the cell's own date pattern
+            if f"{side}_format" in ch and ch[f"{side}_kind"] != "date" and ch[f"{other}_kind"] == "date":
+                # Going back from a date: writing a date also set a date format; put the old one back.
+                if ch[f"{side}_format"]:
+                    data.setdefault("userEnteredFormat", {})["numberFormat"] = ch[f"{side}_format"]
+                fields += ",userEnteredFormat.numberFormat"
             reqs.append({"updateCells": {
                 "range": {"sheetId": sheets[ch["sheet"]]["id"], "startRowIndex": ch["row"] - 1,
                           "endRowIndex": ch["row"], "startColumnIndex": ch["col"] - 1, "endColumnIndex": ch["col"]},
@@ -471,7 +492,18 @@ class SheetsStore:
             raise ConflictError("The sheet changed since it was read; nothing was saved. Re-read and retry.")
         changes = self._diff(wb, current)
         backup = self._backup(changes, before)
-        self._apply(changes, current["sheets"], "new", grow=True)
+        try:
+            self._apply(changes, current["sheets"], "new", grow=True)
+        except TrackerError as e:   # the reply was lost: find out whether the write landed
+            try:
+                landed = self._read()[1] != before
+            except TrackerError:
+                landed = True
+            if landed:
+                raise UnverifiedWrite(backup.name, f"Sending the change to Google failed ({e}), but the sheet "
+                                      "changed, so it may have been written. Do not repeat the call: read "
+                                      "the tracker again to see what landed.") from e
+            raise TrackerError(f"{e} Nothing was saved.") from e
         try:
             written, after, _ = self._read_back()
         except TrackerError as e:
@@ -491,8 +523,10 @@ class SheetsStore:
             raise TrackerError(f"Backup {backup} is gone; nothing to restore.")
         saved = json.loads(path.read_text(encoding="utf-8"))
         _, now, current = self._read()
-        changes = [{**c, "old": c["new"], "old_kind": c["new_kind"], "new": c["old"], "new_kind": c["old_kind"]}
-                   for c in saved["cells"]]
+        changes = [{**c, "old": c["new"], "old_kind": c["new_kind"], "new": c["old"], "new_kind": c["old_kind"],
+                    "new_format": c.get("old_format")} for c in saved["cells"]]
+        for c in changes:
+            c.pop("old_format", None)
         safety = self._backup(changes, now)
         self._apply(changes, current["sheets"], "new")
         return safety.name, self._read()[1]

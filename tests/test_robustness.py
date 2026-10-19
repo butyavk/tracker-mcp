@@ -234,3 +234,103 @@ def test_summary_text_starting_with_equals_is_not_treated_as_a_formula(tmp_path)
     wb = openpyxl.load_workbook(book)
     assert wb[summary]["H1"].value == "=Applications!C2:C5 is how it is counted"
     assert wb[summary]["H1"].data_type == "s"
+
+
+# ---------------------------------------------------------------- second review
+
+def test_a_lost_reply_is_checked_before_saying_anything(jobs, monkeypatch):
+    init(URL)
+    t = tracker()
+    jobs.fail_next_post = TrackerError("Could not reach Google Sheets (timed out).")
+    with pytest.raises(TrackerError, match="may have been written"):
+        t.set_status(3, "Interview")
+    assert t.recent_writes(1)["writes"][0]["unverified"]
+
+    real = t.store._call
+
+    def refused(method, url, body):   # rejected before anything was applied
+        if method == "POST":
+            raise TrackerError("Google Sheets error 500: backend error.")
+        return real(method, url, body)
+
+    t.store._call = refused
+    with pytest.raises(TrackerError, match="Nothing was saved"):
+        t.set_status(2, "Interview")
+    assert jobs.value("Jobs", 2, 3) == "Applied"
+
+
+def test_cells_too_long_to_keep_block_writes(tmp_path, monkeypatch):
+    sheets(monkeypatch, tmp_path, {"Jobs": [HEADERS, ["Acme", "EM", "Applied", None, None, None, "x" * 40000]]})
+    init(URL)
+    t = tracker()
+    assert "more than 32767 characters" in t.describe()["writes_blocked"][0]
+    with pytest.raises(TrackerError, match="Writes are off"):
+        t.add_application("Globex", "EM")
+    path = tmp_path / "long.csv"
+    path.write_text("Company,Role,Status,Notes\nAcme,EM,Applied," + "y" * 40000 + "\n", encoding="utf-8")
+    init(path)
+    with pytest.raises(TrackerError, match="Writes are off"):
+        tracker(path).add_application("Globex", "EM")
+    assert len(path.read_text(encoding="utf-8")) > 40000
+
+
+def test_bom_and_windows_encoding_together(tmp_path):
+    path = tmp_path / "jobs.csv"
+    path.write_bytes(b"\xef\xbb\xbf" + "Company,Role,Status\r\nCafé,EM,Applied\r\n".encode("cp1252"))
+    init(path)
+    t = tracker(path)
+    assert t.describe()["columns"]["company"] == "A: Company"
+    t.add_application("Société", "VP")
+    t.add_application("Hooli", "VP")
+    data = path.read_bytes()
+    assert data.startswith(b"\xef\xbb\xbfCompany") and data.count(b"\xef\xbb\xbf") == 1
+
+
+def test_a_cyrillic_csv_in_a_windows_code_page_is_refused(tmp_path):
+    path = tmp_path / "jobs.csv"
+    path.write_bytes("Компания;Роль;Статус\nЯндекс;Руководитель;Подано\n".encode("cp1251"))
+    with pytest.raises(TrackerError, match="CSV UTF-8"):
+        open_store(path).load()
+
+
+def test_line_endings_follow_the_first_row(tmp_path):
+    path = tmp_path / "jobs.csv"
+    path.write_bytes(b'Company,Role,Status,Notes\nAcme,EM,Applied,"two\r\nlines"\n')
+    init(path)
+    tracker(path).add_application("Globex", "EM")
+    data = path.read_bytes()
+    assert data.count(b"\r\n") == 1 and data.endswith(b"Globex,EM,Not applied,\n")
+
+
+def test_tab_titles_that_differ_only_in_case(tmp_path, monkeypatch):
+    fake = sheets(monkeypatch, tmp_path, {"a/b": [["x"]], "A_B": [HEADERS, ["Acme", "EM", "Applied"]]})
+    init(URL)
+    assert load_config(URL).sheet == "A_B"
+    tracker().add_application("Globex", "EM")
+    assert fake.value("A_B", 3, 1) == "Globex" and fake.value("a/b", 3, 1) is None
+
+
+def test_the_config_keeps_the_real_tab_title(tmp_path, monkeypatch):
+    fake = sheets(monkeypatch, tmp_path, {
+        "Jobs/2026": [HEADERS, ["Acme", "EM", "Applied"]],
+        "Stats": [["Applied", "=COUNTIF('Jobs/2026'!C2:C2,\"Applied\")"]],
+    })
+    init(URL)
+    cfg = load_config(URL)
+    assert cfg.sheet == "Jobs/2026" and cfg.summary_sheet == "Stats"
+    init(URL, sheet="Jobs/2026", force=True)
+    tracker().add_application("Globex", "EM")
+    assert fake.value("Stats", 1, 2) == "=COUNTIF('Jobs/2026'!C2:C103,\"Applied\")"
+    assert fake.kind("Stats", 1, 2) == "formulaValue"
+
+
+def test_undo_of_a_date_written_over_a_number_restores_the_format(jobs):
+    jobs.set("Jobs", 3, 4, 7)                              # a plain number in the date column
+    store = gsheets.SheetsStore(URL, transport=jobs)
+    wb, before, _ = store.load()
+    wb["Jobs"].cell(3, 4).value = datetime(2026, 10, 18)
+    backup, _ = store.save(wb, before, lambda saved: None)
+    assert jobs.is_date("Jobs", 3, 4)
+    store.restore(backup)
+    assert jobs.value("Jobs", 3, 4) == 7 and not jobs.is_date("Jobs", 3, 4)
+    assert store.version() == before

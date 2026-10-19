@@ -35,6 +35,7 @@ from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.workbook.workbook import Workbook
 
 KEEP_BACKUPS = 200
+MAX_TEXT = 32767   # characters openpyxl keeps in one cell
 
 
 class TrackerError(Exception):
@@ -215,15 +216,18 @@ class CsvStore(_FileStore):
     def __init__(self, path: str | Path, backup_dir: str | Path | None = None):
         super().__init__(path, backup_dir)
         self.delimiter, self.bom, self.encoding, self.newline = ",", False, "utf-8", "\r\n"
+        self.lossy: list[str] = []
         self.sheet = re.sub(r"[\[\]:*?/\\]", "_", self.path.stem)[:31] or "Sheet1"
 
     def _parse(self, data: bytes) -> Workbook:
         self.bom = data.startswith(b"\xef\xbb\xbf")
+        body = data[3:] if self.bom else data
         try:
-            text, self.encoding = data.decode("utf-8-sig"), "utf-8"
-        except UnicodeDecodeError:   # Excel's plain "CSV" on Windows
-            text, self.encoding = data.decode("cp1252", errors="replace"), "cp1252"
-        self.newline = "\r\n" if "\r\n" in text[:65536] or "\n" not in text else "\n"
+            text, self.encoding = body.decode("utf-8"), "utf-8"
+        except UnicodeDecodeError:
+            text, self.encoding = _cp1252(body, self.path.name), "cp1252"   # Excel's plain "CSV" on Windows
+        end = text.find("\n")   # the first row's line ending decides
+        self.newline = "\r\n" if end < 0 or (end > 0 and text[end - 1] == "\r") else "\n"
         try:
             self.delimiter = csv.Sniffer().sniff(text[:4096], delimiters=",;\t").delimiter
         except csv.Error:
@@ -231,13 +235,17 @@ class CsvStore(_FileStore):
         wb = Workbook()
         ws = wb.active
         ws.title = self.sheet
+        self.lossy = []
         for row in csv.reader(io.StringIO(text, newline=""), delimiter=self.delimiter):
+            if any(len(v) > MAX_TEXT for v in row):
+                self.lossy.append(f"row {ws.max_row + 1} has a cell with more than {MAX_TEXT} characters, "
+                                  "and the rest would be cut off")
             ws.append([ILLEGAL_CHARACTERS_RE.sub(" ", v) if v != "" else None for v in row])
         return wb
 
     def load(self) -> tuple[Workbook, str, list[str]]:
         data = self._bytes()
-        return self._parse(data), digest(data), []
+        return self._parse(data), digest(data), self.lossy
 
     def _render(self, wb: Workbook) -> bytes:
         out = io.StringIO(newline="")
@@ -250,6 +258,22 @@ class CsvStore(_FileStore):
             raise TrackerError(f"«{e.object[e.start:e.end]}» cannot be written to this CSV file: it is saved "
                                f"as {self.encoding}. Save it as «CSV UTF-8» in Excel and retry.") from e
         return (b"\xef\xbb\xbf" if self.bom else b"") + body
+
+
+def _cp1252(body: bytes, name: str) -> str:
+    """Windows-1252, the encoding of Excel's plain "CSV" in Western Europe and the US.
+    Text in another code page (Cyrillic, Greek...) would read as gibberish, so it is
+    refused rather than guessed."""
+    try:
+        text = body.decode("cp1252")
+    except UnicodeDecodeError:
+        text = ""
+    letters = [ch for ch in text if ch.isalpha()]
+    accented = sum(1 for ch in letters if "\u00c0" <= ch <= "\u00ff")
+    if not text or (letters and accented / len(letters) > 0.3):
+        raise TrackerError(f"{name} is not saved as UTF-8, and its encoding cannot be told for sure. "
+                           "Save it as «CSV UTF-8» (Excel: File → Save As) and retry.")
+    return text
 
 
 def _csv_text(value: object) -> str:

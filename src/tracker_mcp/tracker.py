@@ -76,6 +76,18 @@ def parse_date(value: Any, formats: tuple[str, ...] | list[str] = ()) -> date | 
     return None
 
 
+def sheet_in(wb: Workbook, title: str) -> str:
+    """The workbook's name for a sheet title. A Google tab title openpyxl refuses
+    ("Q1/Q2") gets another name in the workbook; configs keep the real title."""
+    return getattr(wb, "tracker_titles", {}).get(title, title)
+
+
+def real_title(ws: Worksheet) -> str:
+    """The sheet's title as the user sees it (the Google tab title)."""
+    back = {safe: real for real, safe in getattr(ws.parent, "tracker_titles", {}).items()}
+    return back.get(ws.title, ws.title)
+
+
 def dropdown_values(ws: Worksheet, col: int) -> list[str] | None:
     """The list a column's dropdown offers: inline ("A,B,C"), a cell range
     (Lists!$A$1:$A$9) or a defined name pointing to one. None if there is none."""
@@ -93,8 +105,7 @@ def dropdown_values(ws: Worksheet, col: int) -> list[str] | None:
         if f in wb.defined_names:
             f = wb.defined_names[f].attr_text
         sheet_name, _, ref = f.rpartition("!")
-        sheet_name = sheet_name.strip("'")
-        sheet_name = getattr(wb, "tracker_titles", {}).get(sheet_name, sheet_name)
+        sheet_name = sheet_in(wb, sheet_name.strip("'"))
         try:
             sheet = wb[sheet_name] if sheet_name else ws
             cells = sheet[ref.replace("$", "")]
@@ -250,7 +261,7 @@ class Tracker:
     def _sheet(self, wb: Workbook) -> Worksheet:
         if self.store.single_sheet:
             return wb.worksheets[0]
-        name = getattr(wb, "tracker_titles", {}).get(self.cfg.sheet, self.cfg.sheet)  # Google titles
+        name = sheet_in(wb, self.cfg.sheet)
         if name not in wb.sheetnames:
             raise TrackerError(f"Sheet «{self.cfg.sheet}» not found. Sheets: {', '.join(wb.sheetnames)}")
         return wb[name]
@@ -935,7 +946,7 @@ class Tracker:
             if m and int(m.group(4)) < new_row:
                 ws.auto_filter.ref = f"{m.group(1)}{m.group(2)}:{m.group(3)}{new_row}"
                 notes.append(f"filter now {ws.auto_filter.ref}")
-        summary = self.cfg.summary_sheet
+        summary = self.cfg.summary_sheet and sheet_in(wb, self.cfg.summary_sheet)
         if summary and summary in wb.sheetnames:
             sheet = self.cfg.sheet
             ref = re.escape(sheet) if re.fullmatch(r"\w+", sheet) else re.escape(f"'{sheet}'")
