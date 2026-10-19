@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.4 — 2026-10-20
+
+Added
+- `calendar_events` and the **Put my follow-ups in my calendar** prompt: the client's
+  own calendar tool (Claude with the Google Calendar connector, say) keeps a calendar in
+  step with the tracker. Each event carries an id line, so the client finds it again to
+  move or delete it instead of adding a second one, and never touches other events. The
+  `.ics` export carries the same line.
+- `add_column(options=[...])` adds a dropdown in Excel, as far down as the sheet's other
+  dropdowns; a furthest-stage column (`field="reached"`) gets the stages by default. In
+  Google Sheets the preview says to add the dropdown there.
+
 ## 0.4.3 — 2026-10-20
 
 Changed
