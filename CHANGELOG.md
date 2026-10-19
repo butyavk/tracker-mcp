@@ -1,5 +1,26 @@
 # Changelog
 
+## 0.3.1 — 2026-10-19
+
+Google Sheets without a Google Cloud project of your own.
+
+Added
+- `uvx tracker-mcp auth google` signs in with tracker-mcp's own Google client: Google's
+  sign-in, then its file picker, and the server can open only the spreadsheets you pick
+  (scope `drive.file`). No Cloud project, API keys or consent screen to set up. The client
+  is built into the PyPI packages; a copy run from the source code still takes
+  `--client-secret`.
+- A project site with the privacy policy: https://butyavk.github.io/tracker-mcp/
+
+Changed
+- README: why a server rather than Claude editing the file directly, and the Claude
+  Desktop extension as the first way to install (it reads a tracker in Documents
+  without the launcher).
+
+Fixed
+- 0.3.0 said a client id alone was enough for `auth google`. Google's token endpoint
+  requires a Desktop client's secret even with PKCE, so a client JSON needs it.
+
 ## 0.3.0 — 2026-10-19
 
 The first public release: the server now works with anyone's tracker, not just mine.
@@ -30,7 +51,7 @@ Added
   instructions in cells.
 - `tracker-mcp auth google --client-secret <client.json> --pick` signs in and opens
   Google's file picker: the server can open only the sheets you pick (scope
-  `drive.file`). A client id is enough; the sign-in uses PKCE.
+  `drive.file`).
 
 Changed
 - Every write needs the user's yes, enforced by the server: a confirmation dialog

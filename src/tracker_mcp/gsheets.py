@@ -17,9 +17,10 @@ Safety, compared with a file:
   are restored and the write is reported as failed.
 
 Authorization, one of:
-- `tracker-mcp auth google`: sign in with the project's own OAuth client and pick
-  the tracker in Google's file picker. Scope `drive.file`: the server can open only
-  the sheets picked this way (or created by it), nothing else in the account;
+- `tracker-mcp auth google`: sign in with the project's own OAuth client (built into
+  the PyPI packages) and pick the tracker in Google's file picker. Scope `drive.file`:
+  the server can open only the sheets picked this way (or created by it), nothing else
+  in the account;
 - your own OAuth client: `tracker-mcp auth google --client-secret client_secret.json`
   (a "Desktop app" client from your Google Cloud project), scope `spreadsheets`;
   the refresh token is kept in ~/.tracker-mcp/google-token.json;
@@ -58,12 +59,25 @@ from .stores import ConflictError, TrackerError, UnverifiedWrite, Verify, digest
 SCOPE = "https://www.googleapis.com/auth/spreadsheets"
 FILE_SCOPE = "https://www.googleapis.com/auth/drive.file"   # only files the user picks
 SHEET_MIME = "application/vnd.google-apps.spreadsheet"
-# The project's own OAuth client: a Desktop-app client id with scope drive.file. A
-# desktop app is a public client, so the sign-in uses PKCE and no client secret
-# (optional for this client type at Google). None until the project's consent
-# screen is published; until then `auth google` needs --client-secret, or
-# TRACKER_GOOGLE_CLIENT=/path/client.json (a client id is enough).
-BUILTIN_CLIENT: dict[str, str] | None = None
+# The project's own OAuth client: a Desktop-app client of the "tracker-mcp" Google Cloud
+# project, whose consent screen asks for drive.file only, so it can open just the sheets a
+# user picks. The sign-in uses PKCE, but Google's token endpoint still requires this
+# client type's secret. For a desktop app that secret is not confidential (Google: "the
+# client secret is obviously not treated as a secret"); it is kept out of git all the
+# same: the release build writes it to _google_client.py from a repository secret. A copy
+# run from a clone has no built-in client and needs --client-secret.
+BUILTIN_CLIENT_ID = "279023124405-u95apgvv0hqqk1o9majb5ht49jg1s8ha.apps.googleusercontent.com"
+
+
+def _builtin_client() -> dict[str, str] | None:
+    try:
+        from ._google_client import CLIENT_SECRET  # written by the release build
+    except ImportError:
+        return None
+    return {"client_id": BUILTIN_CLIENT_ID, "client_secret": CLIENT_SECRET} if CLIENT_SECRET else None
+
+
+BUILTIN_CLIENT = _builtin_client()
 API = "https://sheets.googleapis.com/v4/spreadsheets"
 TOKEN_URI = "https://oauth2.googleapis.com/token"
 LOGIN_TIMEOUT = 300   # seconds to wait for the browser to come back
@@ -130,8 +144,8 @@ class GoogleAuth:
         if self.token_file.exists():
             info = json.loads(self.token_file.read_text(encoding="utf-8"))
             return self._refresh(info)
-        raise TrackerError("Not signed in to Google. Run `tracker-mcp auth google --client-secret "
-                           "<client_secret.json>` once, or set GOOGLE_APPLICATION_CREDENTIALS to a "
+        raise TrackerError("Not signed in to Google. Run `uvx tracker-mcp auth google` once in a terminal: it "
+                           "opens Google's sign-in and file picker. Or set GOOGLE_APPLICATION_CREDENTIALS to a "
                            "service-account key and share the sheet with its e-mail.")
 
     def _service_account(self, info: dict) -> tuple[str, float]:
@@ -169,7 +183,7 @@ def _post_form(url: str, fields: dict[str, str]) -> dict:
 
 
 def _secret(client: dict) -> dict[str, str]:
-    """A client secret, only if the client has one (the built-in client has none)."""
+    """The client's secret, if it has one (a client JSON without it still gets a clear error from Google)."""
     return {"client_secret": client["client_secret"]} if client.get("client_secret") else {}
 
 
@@ -179,9 +193,10 @@ def _client(client_secret: str | Path | None) -> dict[str, str]:
         raw = json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
         return raw.get("installed") or raw.get("web") or raw
     if not BUILTIN_CLIENT:
-        raise TrackerError("This build has no built-in Google client. Create a Desktop-app OAuth client in "
-                           "your Google Cloud project and pass it: tracker-mcp auth google --client-secret "
-                           "client_secret.json")
+        raise TrackerError("This copy of tracker-mcp has no built-in Google client: the packages on PyPI have "
+                           "one, a copy run from the source code does not. Run `uvx tracker-mcp auth google`, or "
+                           "pass a Desktop-app OAuth client of your own Google Cloud project: "
+                           "tracker-mcp auth google --client-secret client_secret.json")
     return BUILTIN_CLIENT
 
 

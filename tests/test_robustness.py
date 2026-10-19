@@ -8,6 +8,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
+from pathlib import Path
 
 import openpyxl
 import pytest
@@ -383,10 +384,18 @@ def test_sign_in_with_the_picker_sets_up_the_picked_sheet(tmp_path, monkeypatch,
         return True
 
     monkeypatch.setattr(gsheets.webbrowser, "open", browser)
-    monkeypatch.setattr(gsheets, "_post_form", lambda url, fields: {"refresh_token": "r", "access_token": "a"})
+    posted = []
+
+    def post(url, fields):
+        posted.append(fields)
+        return {"refresh_token": "r", "access_token": "a"}
+
+    monkeypatch.setattr(gsheets, "_post_form", post)
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
     monkeypatch.setenv("no_proxy", "127.0.0.1")
     assert cli(["auth", "google"]) == 0
+    # Google requires a Desktop client's secret at the token endpoint even with PKCE
+    assert posted[0]["client_secret"] == "public" and posted[0]["code_verifier"]
     assert seen["scope"] == gsheets.FILE_SCOPE and seen["trigger_onepick"] == "true"
     assert seen["mimetypes"] == gsheets.SHEET_MIME and seen["client_id"] == "builtin"
     out = capsys.readouterr().out
@@ -401,3 +410,20 @@ def test_without_a_built_in_client_the_message_says_what_to_do(monkeypatch):
     monkeypatch.delenv("TRACKER_GOOGLE_CLIENT", raising=False)
     with pytest.raises(TrackerError, match="--client-secret"):
         gsheets.login()
+
+
+def test_the_built_in_client_comes_from_the_release_build(monkeypatch):
+    """The secret is written to _google_client.py by the release build, never kept in git."""
+    import types
+    monkeypatch.delitem(sys.modules, "tracker_mcp._google_client", raising=False)
+    if (Path(gsheets.__file__).parent / "_google_client.py").exists():
+        pytest.skip("a built copy: the module is there")
+    assert gsheets._builtin_client() is None
+    built = types.ModuleType("tracker_mcp._google_client")
+    built.CLIENT_SECRET = "from-the-build"
+    monkeypatch.setitem(sys.modules, "tracker_mcp._google_client", built)
+    assert gsheets._builtin_client() == {"client_id": gsheets.BUILTIN_CLIENT_ID, "client_secret": "from-the-build"}
+    built.CLIENT_SECRET = ""
+    assert gsheets._builtin_client() is None
+    ignored = (Path(__file__).parents[1] / ".gitignore").read_text(encoding="utf-8")
+    assert "src/tracker_mcp/_google_client.py" in ignored.splitlines()

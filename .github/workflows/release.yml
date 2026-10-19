@@ -38,10 +38,35 @@ jobs:
         run: |
           uv sync --frozen
           uv run --frozen pytest -q
+      - name: The built-in Google client
+        # Google requires a Desktop client's secret at sign-in even with PKCE, and does not
+        # treat it as confidential for desktop apps. It stays out of git and goes only into
+        # the packages: Settings → Secrets and variables → Actions → GOOGLE_OAUTH_CLIENT_SECRET.
+        env:
+          SECRET: ${{ secrets.GOOGLE_OAUTH_CLIENT_SECRET }}
+        run: |
+          if [ -z "$SECRET" ]; then
+            echo "::error::Add the repository secret GOOGLE_OAUTH_CLIENT_SECRET (the tracker-mcp Desktop client's secret)"
+            exit 1
+          fi
+          python3 - <<'EOF'
+          import os
+          secret = os.environ["SECRET"].strip()
+          with open("src/tracker_mcp/_google_client.py", "w", encoding="utf-8") as f:
+              f.write("# Written by the release build, not kept in git: the secret of tracker-mcp's\n"
+                      "# Desktop-app Google client, which Google requires at sign-in.\n"
+                      f"CLIENT_SECRET = {secret!r}\n")
+          EOF
       - name: Package
-        run: uv build
+        run: |
+          uv build
+          unzip -l dist/*.whl | grep -q tracker_mcp/_google_client.py
+          tar tzf dist/*.tar.gz | grep -q tracker_mcp/_google_client.py
+          uv run --isolated --no-project --with dist/*.whl python -c "from tracker_mcp import gsheets; assert gsheets.BUILTIN_CLIENT"
       - name: Claude Desktop extension
-        run: sh mcpb/build.sh dist-mcpb
+        run: |
+          sh mcpb/build.sh dist-mcpb
+          unzip -l dist-mcpb/*.mcpb | grep -q tracker_mcp/_google_client.py
       - uses: actions/upload-artifact@v6
         with:
           name: dist

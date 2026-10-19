@@ -1,6 +1,6 @@
 [project]
 name = "tracker-mcp"
-version = "0.3.0"
+version = "0.3.1"
 description = "MCP server for your job-application tracker in Excel, CSV or Google Sheets: follow-ups, funnel, safe confirmed writes"
 readme = "README.md"
 license = "MIT"
@@ -43,6 +43,10 @@ dev = ["pytest>=8"]
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build]
+# Git-ignored, written by the release build: the built-in Google client's secret.
+artifacts = ["src/tracker_mcp/_google_client.py"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/tracker_mcp"]

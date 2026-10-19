@@ -7,3 +7,5 @@ backups-tracker-mcp/
 dist/
 dist-mcpb/
 *.mcpb
+# the built-in Google client's secret, written by the release build
+src/tracker_mcp/_google_client.py

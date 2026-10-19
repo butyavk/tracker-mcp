@@ -163,41 +163,56 @@ The server answers when asked; it does not send reminders. Two habits make it pa
 |---|---|---|
 | **Excel** (.xlsx) | `TRACKER_PATH=/path/tracker.xlsx` | Dropdowns, filters and summary formulas are kept and extended to new rows |
 | **CSV** | `TRACKER_PATH=/path/tracker.csv` | Exports from Notion, Huntr, Teal or Sheets. The delimiter, the encoding (UTF-8 or Windows-1252) and line endings are kept; statuses come from the config |
-| **Google Sheets** | `TRACKER_PATH=https://docs.google.com/spreadsheets/d/<id>/edit` | Needs a one-time sign-in, below |
+| **Google Sheets** | `TRACKER_PATH=https://docs.google.com/spreadsheets/d/<id>/edit` | Sign in once and pick the sheet, below |
 
 ### Google Sheets
 
-The server talks to the Sheets API directly, under your Google account or a
-service account. Either way, Google needs a project of yours to know who is asking:
+Sign in once and pick your tracker; there is nothing to set up in Google Cloud:
 
-1. In the [Google Cloud console](https://console.cloud.google.com/), create a project
-   (any name) and enable the **Google Sheets API** for it.
-2. **Your own account:** under *Google Auth Platform*, configure the consent screen
-   (External, add yourself as a test user), then create an OAuth client of type
-   **Desktop app** and download its JSON. Sign in once:
+```sh
+uvx tracker-mcp auth google
+```
 
-   ```sh
-   uvx tracker-mcp auth google --client-secret ~/Downloads/client_secret_….json
-   ```
+Your browser opens Google's sign-in and then Google's file picker. Choose the spreadsheet
+with your applications. tracker-mcp writes its config for that sheet and prints what to
+add to your client: the same setup as for a file, with the sheet's URL as `TRACKER_PATH`.
 
-   The sign-in is kept in `~/.tracker-mcp/google-token.json`. While the consent screen
-   is in *Testing*, Google ends the sign-in after 7 days; switch it to *In production*
-   (Google then warns that the app is unverified, which is expected for your own
-   client) or sign in again.
+- **What tracker-mcp can reach:** only the files you pick in Google's picker (or that it
+  creates), through Google's `drive.file` permission. It cannot see your other sheets or
+  files, your e-mail or your contacts. To use another sheet later, run the command again
+  and pick it.
+- **Where the sign-in is kept:** on your computer, in `~/.tracker-mcp/google-token.json`
+  (readable by you only), with backups of changed cells in `~/.tracker-mcp/backups/`.
+  There is no tracker-mcp server; the program talks to Google directly. To withdraw
+  access, remove tracker-mcp at [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
+  The [privacy policy](https://butyavk.github.io/tracker-mcp/privacy.html) has the details.
+- **On Google's screens** the app may be named by its site, `butyavk.github.io`, rather
+  than "tracker-mcp": Google shows an app's own name only after a brand review that
+  requires a domain of its own. The site is [tracker-mcp's home page](https://butyavk.github.io/tracker-mcp/).
+- **No browser on that computer** (a server over SSH): `uvx tracker-mcp auth google --no-browser`
+  prints the link; the browser must still reach `127.0.0.1` on that computer to finish,
+  so forward the port or sign in where the browser is and copy `~/.tracker-mcp/`.
 
-   **Or a service account:** create one, download its key, share your sheet with the
-   service account's e-mail, and set `GOOGLE_APPLICATION_CREDENTIALS=/path/key.json`
-   in the server's environment. This way the server can reach only the sheets you
-   share with it.
-3. `uvx tracker-mcp init "https://docs.google.com/spreadsheets/d/<id>/edit"` writes the
-   config to `~/.tracker-mcp/<id>.tracker-mcp.toml`. Then use the URL as `TRACKER_PATH`.
+**Your own Google client instead** (a fork, a company account that blocks outside apps,
+or if you prefer not to rely on this project's client): in the
+[Google Cloud console](https://console.cloud.google.com/), create a project, enable the
+**Google Sheets API** (and the **Google Picker API** for `--pick`), configure the consent
+screen (External), create an OAuth client of type **Desktop app** and download its JSON:
 
-Signing in with your own account asks for access to your spreadsheets
-(`spreadsheets` scope). The server opens only the sheet in `TRACKER_PATH`, but the
-permission covers all of them. For less, add `--pick` (and enable the Google Picker
-API in the project): Google's file picker opens after the sign-in, and the server can
-open only the sheets you pick there (`drive.file` scope); the picked sheet gets its
-config right away. A service account also limits access to the sheets you share with it.
+```sh
+uvx tracker-mcp auth google --client-secret ~/Downloads/client_secret_….json --pick   # only the sheets you pick
+uvx tracker-mcp auth google --client-secret ~/Downloads/client_secret_….json          # all your spreadsheets
+```
+
+Without `--pick` the permission (`spreadsheets`) covers every spreadsheet you can open,
+although the server opens only the one in `TRACKER_PATH`; then run
+`uvx tracker-mcp init "https://docs.google.com/spreadsheets/d/<id>/edit"` to write the
+config. While your consent screen is in *Testing*, Google ends the sign-in after 7 days;
+publish it (Audience → Publish app) to keep it.
+
+**Or a service account:** create one, download its key, share your sheet with the
+service account's e-mail, and set `GOOGLE_APPLICATION_CREDENTIALS=/path/key.json` in the
+server's environment. The server can then reach only the sheets you share with it.
 
 ## What Claude can do with it
 
