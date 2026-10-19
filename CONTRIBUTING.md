@@ -28,7 +28,8 @@ npx @modelcontextprotocol/inspector uv --directory . run tracker-mcp --tracker /
 Tool descriptions are prompts: a model reads them to decide what to call. After
 changing a description, an argument or the server instructions, run the evals
 (`ANTHROPIC_API_KEY=… uv run python evals/run_evals.py`, a few cents with a small
-model). If you add or rename a tool, update the tool list in `mcpb/manifest.json`;
+model). On `main` they also run by themselves when `src/` or `evals/` change, if the
+repository has an `ANTHROPIC_API_KEY` secret. If you add or rename a tool, update the tool list in `mcpb/manifest.json`;
 a test checks it.
 
 Every write goes through `Tracker._write` (plan, verify, backup, audit) and the

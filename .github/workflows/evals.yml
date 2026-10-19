@@ -1,9 +1,14 @@
 # Runs evals/run_evals.py against the Claude API: do models pick the right tools,
-# ask before writing, and ignore instructions planted in a cell? Manual only, since
-# it costs a few cents. Needs the repository secret ANTHROPIC_API_KEY.
+# ask before writing, and ignore instructions planted in a cell? Runs by itself when
+# the server's code or the evals change on main (a few cents per run with a small
+# model), and by hand from Actions → evals. Needs the repository secret
+# ANTHROPIC_API_KEY; without it the run is skipped.
 name: evals
 
 on:
+  push:
+    branches: [main]
+    paths: ["src/**", "evals/**"]
   workflow_dispatch:
     inputs:
       model:
@@ -12,6 +17,10 @@ on:
       scenarios:
         description: Scenario names separated by spaces (empty = all)
         default: ""
+
+concurrency:
+  group: evals-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   evals:
@@ -22,8 +31,12 @@ jobs:
       - name: Evals
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          EVAL_MODEL: ${{ inputs.model }}
+          EVAL_MODEL: ${{ inputs.model || 'claude-haiku-5-5' }}
           SCENARIOS: ${{ inputs.scenarios }}
         run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::notice::No ANTHROPIC_API_KEY secret in this repository: evals skipped."
+            exit 0
+          fi
           uv sync --frozen
-          uv run --frozen python evals/run_evals.py $SCENARIOS
+          uv run --frozen python evals/run_evals.py $SCENARIOS | tee -a "$GITHUB_STEP_SUMMARY"

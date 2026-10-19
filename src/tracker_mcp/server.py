@@ -26,7 +26,7 @@ import sys
 from collections import OrderedDict
 from datetime import date
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from mcp.server import MCPServer
 from mcp.server.elicitation import AcceptedElicitation, ElicitationResult
@@ -60,6 +60,8 @@ A job-application tracker kept by the user in Excel, a CSV file or Google Sheets
 - To correct a cell (a wrong date, a typo, the furthest stage) use edit_application,
   never a script that edits the file: it checks the value, shows a preview and keeps
   the backup and the undo.
+- A missing column (see unavailable_tools) is added with add_column, which also maps
+  it in the config; never edit the file or the config with a script.
 - check_tracker finds what hand edits left behind (dates kept as text, rows without
   a status, follow-ups on a weekend, replies without a date); fix_tracker fixes the
   fixable ones in one confirmed write.
@@ -137,7 +139,8 @@ def make_tracker(first_run: bool = True) -> Tracker:
     if first_run and not explicit and not cfg_file.exists():
         _generated = _first_run(path, cfg_file)
     stamp = _stamp(cfg_file)   # taken before reading: an edit during the read is seen next time
-    t = Tracker(path, config=load_config(path, explicit), backup_dir=os.environ.get("TRACKER_BACKUP_DIR"))
+    t = Tracker(path, config=load_config(path, explicit), backup_dir=os.environ.get("TRACKER_BACKUP_DIR"),
+                config_file=cfg_file)
     _watch = (cfg_file, stamp)
     return t
 
@@ -213,6 +216,16 @@ def describe_plan(tool: str, plan: dict[str, Any]) -> str:
     if plan.get("would_undo"):
         e = plan["would_undo"]
         text = f"Undo {e['tool']} from {e['at']} (rows {e['row']}): restore the backup {e['backup']}?"
+        if e.get("config_line"):
+            text += f" The config loses the line {e['config_line']}."
+    elif tool == "add_column":
+        col = plan.get("column", {})
+        where = (plan.get("layout") or ["a new column"])[0]
+        lines = [f"add_column: add {where}" + (" (dates)" if col.get("kind") == "date" else "") + "?"]
+        if col.get("config_line"):
+            lines.append(f"Config, [columns]: + {col['config_line']}")
+        lines += [f"Also: {n}" for n in (plan.get("layout") or [])[1:]]
+        text = "\n".join(lines)
     else:
         labels = plan.get("labels", {})
         lines = [f"{tool}: change {len(labels)} row(s) of the tracker?"]
@@ -580,6 +593,36 @@ def edit_application(
     with log_followup, a moved one with reschedule_followup: they keep the related
     columns in step. The preview shows the old and new value of each cell."""
     return finish(ctx, "edit_application", (row, fields, reason), {}, approval,
+                  dry_run=dry_run, confirm=confirm)
+
+
+def _ask_column(ctx: Context, header: str, field: str | None = None, kind: str = "text",
+                expected_version: str | None = None, dry_run: bool = False):
+    return ask(ctx, "add_column", (header,), dict(field=field, kind=kind),
+               expected_version=expected_version, dry_run=dry_run)
+
+
+@tool("Add a column", EDIT)
+def add_column(
+    ctx: Context,
+    approval: Annotated[Approval, Resolve(_ask_column)],
+    header: Annotated[str, Field(description="The header text, in the tracker's language")],
+    field: Annotated[str | None, Field(
+        description="Also map it in the config so the tools use it: replied_on (reply date), reached "
+                    "(furthest stage), followup_on, channel, … or a new name of your own; omit for a "
+                    "column the tools only show")] = None,
+    kind: Annotated[Literal["text", "date"], Field(description="date formats the cells as dates "
+                                                               "(implied by a date field)")] = "text",
+    expected_version: Version = None,
+    dry_run: DryRun = False,
+    confirm: Confirm = None,
+) -> dict[str, Any]:
+    """Add a column after the last one, its header styled like its neighbour's, and with
+    `field` map it in the config so the tools start using it: describe_tracker's
+    unavailable_tools says which columns a tool is missing. Only at the end, so no
+    formula, dropdown or filter of the sheet moves. Undo removes the column and the
+    config line together."""
+    return finish(ctx, "add_column", (header,), dict(field=field, kind=kind), approval,
                   dry_run=dry_run, confirm=confirm)
 
 

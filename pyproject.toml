@@ -1,6 +1,6 @@
 [project]
 name = "tracker-mcp"
-version = "0.4.1"
+version = "0.4.2"
 description = "MCP server for your job-application tracker in Excel, CSV or Google Sheets: follow-ups, funnel, safe confirmed writes"
 readme = "README.md"
 license = "MIT"

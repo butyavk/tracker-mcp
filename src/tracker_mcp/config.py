@@ -10,6 +10,8 @@ describes every key.
 
 from __future__ import annotations
 
+import json
+import re
 import tomllib
 from pathlib import Path
 
@@ -157,9 +159,34 @@ def load_config(tracker: str | Path, explicit: str | Path | None = None) -> Conf
     if not path.exists():
         raise ConfigError(f"No config at {path}. Run `tracker-mcp init {tracker}` to write one from "
                           "your tracker's headers, or `tracker-mcp example` for a commented template.")
+    return load_config_file(path)
+
+
+def load_config_file(path: Path) -> Config:
+    return parse_config(path.read_text(encoding="utf-8"), str(path))
+
+
+def parse_config(text: str, where: str = "config") -> Config:
     try:
-        return Config.model_validate(tomllib.loads(path.read_text(encoding="utf-8")))
+        return Config.model_validate(tomllib.loads(text))
     except tomllib.TOMLDecodeError as e:
-        raise ConfigError(f"{path}: not valid TOML: {e}") from e
+        raise ConfigError(f"{where}: not valid TOML: {e}") from e
     except ValidationError as e:
-        raise ConfigError(f"{path}: {e}") from e
+        raise ConfigError(f"{where}: {e}") from e
+
+
+def with_column(text: str, field: str, header: str) -> str:
+    """The config text with `field = "header"` added at the end of [columns], keeping
+    everything else (comments, order) as it was."""
+    lines = text.splitlines(keepends=True)
+    start = next((i for i, line in enumerate(lines) if re.fullmatch(r"\[columns\]\s*(#.*)?", line.strip())), None)
+    if start is None:
+        raise ConfigError("The config has no [columns] section.")
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].lstrip().startswith("[")), len(lines))
+    while end > start + 1 and not lines[end - 1].strip():   # before the blank lines that end the section
+        end -= 1
+    if lines[end - 1] and not lines[end - 1].endswith("\n"):
+        lines[end - 1] += "\n"
+    value = json.dumps(header, ensure_ascii=False)   # a valid TOML basic string too
+    lines.insert(end, f"{field} = {value}\n")
+    return "".join(lines)

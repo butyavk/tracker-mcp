@@ -176,7 +176,9 @@ def test_reply_times_without_a_column_uses_the_servers_own_records(tmp_path):
     t.mark_applied(2, applied_on=date(2026, 10, 1))
     t.set_status(2, "Interview")
     res = t.reply_times()
-    assert res["total"]["replies_with_dates"] == 1 and res["total"]["median_days"] == 18
+    # the audit log keeps the real day of the write
+    assert res["total"]["replies_with_dates"] == 1
+    assert res["total"]["median_days"] == (date.today() - date(2026, 10, 1)).days
     assert "recorded a reply" in res["source"]
 
 

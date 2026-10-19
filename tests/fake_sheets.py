@@ -70,12 +70,14 @@ class FakeSheets:
             self.requests.append(req)
             if "appendDimension" in req:
                 sheet = self._by_id(req["appendDimension"]["sheetId"])
-                sheet["rows"] += req["appendDimension"]["length"]
+                dim = "cols" if req["appendDimension"]["dimension"] == "COLUMNS" else "rows"
+                sheet[dim] += req["appendDimension"]["length"]
                 continue
             u = req["updateCells"]
             sheet = self._by_id(u["range"]["sheetId"])
             r, c = u["range"]["startRowIndex"] + 1, u["range"]["startColumnIndex"] + 1
             assert r <= sheet["rows"], "write beyond the grid without appendDimension"
+            assert c <= sheet["cols"], "write beyond the last column without appendDimension"
             data = u["rows"][0]["values"][0]
             mask = u["fields"].split(",")
             if "userEnteredValue" in mask:

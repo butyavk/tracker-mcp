@@ -134,7 +134,7 @@ def test_the_audit_counts_only_writes_that_stand_on_rows_that_did_not_move(tmp_p
     t.undo_last_write()
     t.set_status(3, "Screening")
     labels = {2: "Acme — EM", 3: "Globex — EM"}
-    assert reply_dates_from_audit(t, labels) == {3: TODAY}
+    assert reply_dates_from_audit(t, labels) == {3: date.today()}   # the audit keeps the real day
     # after a sort, row 3 holds another application: its old reply is not this one's
     assert reply_dates_from_audit(t, {2: "Acme — EM", 3: "Initech — EM"}) == {}
 
@@ -310,3 +310,122 @@ def test_edit_over_mcp_needs_a_yes(tmp_path):
             assert not res.is_error and res.structured_content["changes"][0]["new"] == "2026-09-03"
 
     anyio.run(go)
+
+
+# ---------------------------------------------------------------- add_column
+
+def with_config_file(t):
+    from tracker_mcp.config import config_path
+    return Tracker(t.path, config=t.cfg, today=lambda: TODAY, config_file=config_path(t.path))
+
+
+def test_add_column_maps_it_and_the_tools_use_it(tmp_path):
+    import re as _re
+
+    from tracker_mcp.config import config_path
+    path, cfg_file = new_tracker(tmp_path / "jobs.xlsx")
+    cfg_file = config_path(path)
+    text = _re.sub(r"(?m)^replied_on\s*=.*\n", "", cfg_file.read_text(encoding="utf-8"))
+    cfg_file.write_text(text, encoding="utf-8")   # a tracker from before 0.4: no reply-date column
+    wb = openpyxl.load_workbook(path)
+    ws = wb["Applications"]
+    ws.delete_cols(15)
+    ws["B2"], ws["H2"], ws["J2"] = "Acme", datetime(2026, 9, 1), "Applied"
+    ws["H2"].number_format = "dd.mm.yyyy"
+    wb.save(path)
+    t = Tracker(path, config=load_config(path), today=lambda: TODAY, config_file=cfg_file)
+    assert "replied_on" not in t.cfg.columns
+    cfg_before = cfg_file.read_bytes()
+
+    plan = t.add_column("Дата ответа", field="replied_on", dry_run=True)
+    preview = server.describe_plan("add_column", plan)
+    assert "column S «Дата ответа» after «Notes»" in preview and "(dates)" in preview
+    assert 'replied_on = "Дата ответа"' in preview and cfg_file.read_bytes() == cfg_before
+
+    res = t.add_column("Дата ответа", field="replied_on")
+    ws = openpyxl.load_workbook(path)["Applications"]
+    assert ws["S1"].value == "Дата ответа" and ws["S1"].font.b == ws["R1"].font.b
+    assert ws["S2"].number_format == "dd.mm.yyyy"
+    assert res["config_line"] == 'replied_on = "Дата ответа"'
+    after = cfg_file.read_text(encoding="utf-8")
+    assert after.replace('replied_on = "Дата ответа"\n', "") == text      # comments and order kept
+    assert load_config(path).columns["replied_on"] == "Дата ответа" == t.cfg.columns["replied_on"]
+    t.set_status(2, "Rejected")              # the tools use the new column at once
+    assert openpyxl.load_workbook(path)["Applications"]["S2"].value == datetime(2026, 10, 19)
+
+
+def test_add_column_undo_removes_the_config_line_too(tmp_path):
+    path, _ = new_tracker(tmp_path / "jobs.xlsx")
+    from tracker_mcp.config import config_path
+    cfg_file = config_path(path)
+    t = Tracker(path, config=load_config(path), today=lambda: TODAY, config_file=cfg_file)
+    before, cfg_before = t.version(), cfg_file.read_bytes()
+    t.add_column("Recruiter", field="recruiter")
+    assert t.cfg.columns["recruiter"] == "Recruiter"
+    plan = t.undo_last_write(dry_run=True)
+    assert 'recruiter = "Recruiter"' in server.describe_plan("undo_last_write", plan)
+    t.undo_last_write()
+    assert t.version() == before and cfg_file.read_bytes() == cfg_before and "recruiter" not in t.cfg.columns
+
+
+def test_add_column_refusals(tmp_path):
+    t = build(tmp_path, [{"company": "Acme", "role": "EM", "status": "Applied"}])
+    for kwargs, match in [({"header": "Company"}, "already"), ({"header": " "}, "one line"),
+                          ({"header": "X", "field": "status"}, "every tracker"),
+                          ({"header": "X", "field": "replied_on"}, "already the column"),
+                          ({"header": "X", "field": "Bad Name"}, "lowercase"),
+                          ({"header": "X", "kind": "money"}, "kind")]:
+        with pytest.raises(TrackerError, match=match):
+            with_config_file(t).add_column(**kwargs, dry_run=True)
+    with pytest.raises(TrackerError, match="does not know where"):
+        t.add_column("Recruiter", field="recruiter", dry_run=True)       # no config file given
+    wb = openpyxl.load_workbook(t.path)
+    wb["Applications"]["T5"] = "a value with no header"
+    wb.save(t.path)
+    with pytest.raises(TrackerError, match="has values but no header"):
+        t.add_column("Recruiter", dry_run=True)
+
+
+def test_add_column_to_csv_and_google_sheet(tmp_path, monkeypatch):
+    from tracker_mcp.scaffold import init
+    path = tmp_path / "export.csv"
+    path.write_text("Company,Role,Status,Date Applied\nAcme,EM,Applied,2026-09-02\n", encoding="utf-8")
+    init(path)
+    from tracker_mcp.config import config_path
+    t = Tracker(path, config=load_config(path), today=lambda: TODAY, config_file=config_path(path))
+    t.add_column("Reply date", field="replied_on")
+    assert path.read_text(encoding="utf-8").splitlines() == ["Company,Role,Status,Date Applied,Reply date",
+                                                            "Acme,EM,Applied,2026-09-02,"]
+
+    from tracker_mcp import gsheets
+
+    from .fake_sheets import FakeSheets
+    monkeypatch.setenv("TRACKER_MCP_HOME", str(tmp_path / "home"))
+    fake = FakeSheets({"Jobs": [["Company", "Role", "Status"], ["Acme", "EM", "Applied"]]})
+    fake.sheets["Jobs"]["cols"] = 3           # no spare columns
+    monkeypatch.setattr(gsheets, "http_transport", lambda auth: fake)
+    url = "https://docs.google.com/spreadsheets/d/abc123XYZ/edit"
+    init(url)
+    g = Tracker(url, config=load_config(url), today=lambda: TODAY, config_file=config_path(url))
+    g.add_column("Applied on", field="applied_on")
+    assert fake.value("Jobs", 1, 4) == "Applied on" and g.cfg.columns["applied_on"] == "Applied on"
+    assert any(r.get("appendDimension", {}).get("dimension") == "COLUMNS" for r in fake.requests)
+
+
+def test_add_column_over_mcp_and_the_next_call_sees_the_new_config(tmp_path, monkeypatch):
+    path, _ = new_tracker(tmp_path / "jobs.xlsx")
+    monkeypatch.setenv("TRACKER_PATH", str(path))
+    monkeypatch.delenv("TRACKER_CONFIG", raising=False)
+    server._tracker, server._watch = None, None
+
+    async def go():
+        async with Client(server.mcp) as c:
+            args = {"header": "Recruiter", "field": "recruiter"}
+            preview = await c.call_tool("add_column", {**args, "dry_run": True})
+            res = await c.call_tool("add_column", {**args, "confirm": preview.structured_content["confirm"]})
+            assert not res.is_error, res.content[0].text
+            d = (await c.call_tool("describe_tracker", {})).structured_content
+            assert d["fields"]["recruiter"] == "Recruiter" if "fields" in d else "recruiter" in str(d)
+
+    anyio.run(go)
+    server._tracker, server._watch = None, None

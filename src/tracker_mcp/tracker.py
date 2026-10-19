@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 from collections import Counter
 from collections.abc import Callable
 from copy import copy
@@ -36,8 +37,8 @@ from openpyxl.workbook.workbook import Workbook
 from openpyxl.worksheet.cell_range import MultiCellRange
 from openpyxl.worksheet.worksheet import Worksheet
 
-from .config import Config
-from .stores import ConflictError, Store, TrackerError, UnverifiedWrite, open_store
+from .config import Config, load_config_file, parse_config, with_column
+from .stores import ConflictError, Store, TrackerError, UnverifiedWrite, backup_path, open_store
 
 __all__ = ["ConflictError", "Tracker", "TrackerError", "dropdown_values", "parse_date"]
 
@@ -189,13 +190,19 @@ def undid(undo: dict[str, Any], entry: dict[str, Any]) -> bool:
 
 class Tracker:
     def __init__(self, target: str | Path, *, config: Config, backup_dir: str | Path | None = None,
-                 today: Callable[[], date] = date.today, store: Store | None = None):
+                 today: Callable[[], date] = date.today, store: Store | None = None,
+                 config_file: str | Path | None = None):
         self.store = store or open_store(target, backup_dir)
         self.path: Path | None = getattr(self.store, "path", None)
         self.backup_dir = self.store.backup_dir
-        self.cfg = config
+        # where the config lives, for add_column(field=...); None: the server does not write it
+        self.config_file = Path(config_file).expanduser() if config_file else None
         self.today = today
         self.lossy: list[str] = []   # set by each load, see _load
+        self._use(config)
+
+    def _use(self, config: Config) -> None:
+        self.cfg = config
         st = config.statuses
         self.closed = set(st.closed)
         self.waiting = set(st.waiting or [st.applied])
@@ -986,6 +993,94 @@ class Tracker:
 
         return self._write("edit_application", mutate, expected_version, dry_run)
 
+    def add_column(self, header: str, *, field: str | None = None, kind: str = "text",
+                   expected_version: str | None = None, dry_run: bool = False) -> dict[str, Any]:
+        """A new column after the last one, with the header styled like its neighbour.
+        `field` also maps it in the config ([columns] field = "header"), so the tools use
+        it: replied_on for reply dates, reached for the furthest stage, or a custom name.
+        `kind`: "date" formats the cells as dates (implied by a date field). Undo removes
+        the column and the config line together."""
+        cfg = self.cfg
+        header = (header or "").strip()
+        if not header or len(header) > 100 or "\n" in header:
+            raise TrackerError("The header must be one line of 1–100 characters.")
+        if kind not in ("text", "date"):
+            raise TrackerError("kind is «text» or «date».")
+        new_text = None
+        if field is not None:
+            if not re.fullmatch(r"[a-z][a-z0-9_]{0,40}", field):
+                raise TrackerError("A field name is lowercase letters, digits and _, e.g. replied_on or source.")
+            if field in ("company", "role", "status"):
+                raise TrackerError(f"{field} is a column every tracker has already.")
+            if field in cfg.columns:
+                raise TrackerError(f"{field} is already the column «{cfg.columns[field]}».")
+            if self.config_file is None or not self.config_file.exists():
+                raise TrackerError("The server does not know where this tracker's config is, so it cannot map "
+                                   f"a field. Add the column without `field`, then add {field} = \"{header}\" "
+                                   "to [columns] in the config by hand.")
+            new_text = with_column(self.config_file.read_text(encoding="utf-8"), field, header)
+            parse_config(new_text, str(self.config_file))   # refuse before writing anything
+            if cfg.is_date(field) or field.endswith("_on"):
+                kind = "date"
+        config_line = f"{field} = {json.dumps(header, ensure_ascii=False)}" if field else None
+
+        def mutate(wb: Workbook, ws: Worksheet, lay: Layout):
+            if any(h.casefold() == header.casefold() for h in lay.headers.values()):
+                raise TrackerError(f"There is a column «{header}» already"
+                                   + (f"; to use it, add {config_line} to [columns] in the config." if field else "."))
+            last = max(lay.headers)
+            col = last + 1
+            if any(ws.cell(r, col).value not in (None, "") for r in range(lay.header_row, ws.max_row + 1)):
+                raise TrackerError(f"Column {get_column_letter(col)} has values but no header; give it one or "
+                                   "clear it first.")
+            prev, cell = ws.cell(lay.header_row, last), ws.cell(lay.header_row, col)
+            if isinstance(cell, MergedCell):
+                raise TrackerError(f"{cell.coordinate} is part of a merged range; unmerge it first.")
+            changes: list[Change] = []
+            self._set_cell(cell, lay.header_row, header, header, changes)
+            notes = [f"column {get_column_letter(col)} «{header}» after «{lay.headers[last]}»"]
+            if self.store.kind == "xlsx":
+                cell._style = copy(prev._style)
+                letter, prev_letter = get_column_letter(col), get_column_letter(last)
+                if prev_letter in ws.column_dimensions and ws.column_dimensions[prev_letter].width:
+                    ws.column_dimensions[letter].width = ws.column_dimensions[prev_letter].width
+                date_fmt = None
+                if kind == "date":
+                    # the submit dates' most common format, without a time of day
+                    src = lay.cols.get("applied_on") or lay.cols.get("followup_on")
+                    used = Counter(ws.cell(r, src).number_format for r in range(lay.header_row + 1, lay.last_row + 1)
+                                   if src and isinstance(ws.cell(r, src).value, datetime)
+                                   and ws.cell(r, src).number_format not in ("General", None)
+                                   and "h" not in ws.cell(r, src).number_format.lower())
+                    date_fmt = used.most_common(1)[0][0] if used else "yyyy-mm-dd"
+                for r in range(lay.header_row + 1, max(lay.last_row, lay.header_row + 1) + 1):
+                    target = ws.cell(r, col)
+                    target._style = copy(ws.cell(r, last)._style)
+                    if date_fmt:
+                        target.number_format = date_fmt
+                ref = ws.auto_filter.ref
+                m = re.fullmatch(r"([A-Z]+)(\d+):([A-Z]+)(\d+)", ref or "")
+                if m and m.group(3) == prev_letter:
+                    ws.auto_filter.ref = f"{m.group(1)}{m.group(2)}:{letter}{m.group(4)}"
+                    notes.append(f"filter now {ws.auto_filter.ref}")
+            return lay.header_row, changes, notes
+
+        def write_config() -> dict[str, Any]:
+            if not new_text:
+                return {}
+            assert self.config_file is not None
+            self.backup_dir.mkdir(parents=True, exist_ok=True)
+            backup = backup_path(self.backup_dir, self.config_file.name + ".before-add-column", "")
+            shutil.copy2(self.config_file, backup)
+            self.config_file.write_text(new_text, encoding="utf-8")
+            self._use(parse_config(new_text, str(self.config_file)))
+            return {"config_file": str(self.config_file), "config_backup": backup.name, "config_line": config_line}
+
+        result = self._write("add_column", mutate, expected_version, dry_run, after_save=write_config)
+        result["column"] = {"header": header, "kind": kind, **({"field": field, "config_line": config_line}
+                                                                if field else {})}
+        return result
+
     def undo_last_write(self, expected_version: str | None = None, dry_run: bool = False) -> dict[str, Any]:
         """Restore the backup of the last write, only if nothing changed since."""
         entries = self._audit_entries()
@@ -1004,6 +1099,11 @@ class Tracker:
         if dry_run:
             return {"dry_run": True, "would_undo": entry, "version": current}
         safety, after = self.store.restore(entry["backup"])
+        if entry.get("config_backup") and entry.get("config_file"):   # add_column also mapped a field
+            source = self.backup_dir / entry["config_backup"]
+            if source.exists():
+                Path(entry["config_file"]).write_bytes(source.read_bytes())
+                self._use(load_config_file(Path(entry["config_file"])))
         self._audit({"tool": "undo_last_write", "undid": entry["at"], "undid_backup": entry.get("backup"),
                      "row": entry["row"],
                      "changes": [], "backup": safety,
@@ -1013,7 +1113,8 @@ class Tracker:
     # ---- writing: the safe path
 
     def _write(self, tool: str, mutate: Callable[[Workbook, Worksheet, Layout], tuple],
-               expected_version: str | None, dry_run: bool) -> dict[str, Any]:
+               expected_version: str | None, dry_run: bool,
+               after_save: Callable[[], dict[str, Any]] | None = None) -> dict[str, Any]:
         if not dry_run:
             self.store.check_writable()
         wb, ws, lay, before = self._load()
@@ -1048,10 +1149,11 @@ class Tracker:
                          "backup": e.backup, "version_before": before, "version_after": None,
                          "unverified": str(e)})
             raise
+        extra = after_save() if after_save else {}   # e.g. the config line of a new column
         self._audit({"tool": tool, "row": row, "changes": result["changes"], "labels": result["labels"],
                      "layout": layout_notes, "backup": backup,
-                     "version_before": before, "version_after": after})
-        result.update(backup=str(self.backup_dir / backup), version=after)
+                     "version_before": before, "version_after": after, **extra})
+        result.update(backup=str(self.backup_dir / backup), version=after, **extra)
         return result
 
     def _verify(self, saved: Workbook, changes: list[Change]) -> None:

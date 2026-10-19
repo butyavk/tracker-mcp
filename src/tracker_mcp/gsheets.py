@@ -493,6 +493,10 @@ class SheetsStore:
                 if need > meta["rows"]:
                     reqs.append({"appendDimension": {"sheetId": meta["id"], "dimension": "ROWS",
                                                      "length": need - meta["rows"] + 50}})
+                need_col = max((ch["col"] for ch in changes if ch["sheet"] == title), default=0)
+                if need_col > meta["cols"]:   # a column added after the sheet's last one
+                    reqs.append({"appendDimension": {"sheetId": meta["id"], "dimension": "COLUMNS",
+                                                     "length": need_col - meta["cols"]}})
         other = "old" if side == "new" else "new"
         for ch in changes:
             data, fields = _to_api(ch[side], ch[f"{side}_kind"])

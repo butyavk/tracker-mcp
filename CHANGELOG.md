@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.2 — 2026-10-20
+
+Added
+- `add_column`: a new column after the last one, its header and cells styled like the
+  neighbouring column (dates formatted like the submit dates), the filter extended.
+  With `field` it is also mapped in the config — `replied_on`, `reached` or a name of
+  your own — and the tools use it from the next call. Undo removes the column and the
+  config line together. Works for Excel, CSV and Google Sheets (the sheet grows a
+  column if it has none to spare).
+- Evals for `check_tracker`, `reply_times`, `edit_application` and `add_column`. The
+  evals workflow runs by itself on `main` when the code or the evals change, if the
+  repository has an `ANTHROPIC_API_KEY` secret, and is skipped otherwise.
+
+Fixed
+- Two tests assumed the day they were written: the audit log keeps the real day of a
+  write, and the tests now compare with it.
+
 ## 0.4.1 — 2026-10-19
 
 Added
