@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>tracker-mcp: your job-application spreadsheet, kept with Claude</title>
+<meta name="description" content="tracker-mcp is a free, open-source MCP server that lets Claude and other AI assistants read and update the spreadsheet where you track job applications: Excel, CSV or Google Sheets.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <nav>
+    <a href="./">tracker-mcp</a>
+    <a href="privacy.html">Privacy policy</a>
+    <a href="https://github.com/butyavk/tracker-mcp">Source code</a>
+    <a href="https://github.com/butyavk/tracker-mcp/issues">Help</a>
+  </nav>
+  <h1>Your job-application spreadsheet, kept with Claude</h1>
+  <p class="lead">tracker-mcp is a free, open-source program that connects an AI assistant
+  (Claude, or any client that speaks the Model Context Protocol) to the spreadsheet where you
+  track your job applications. The assistant answers from it, tells you which follow-ups are
+  due, and records what happened, and nothing is written without your yes.</p>
+</header>
+<main>
+  <div class="chat">
+    <p><b>You:</b> Which follow-ups are due this week?</p>
+    <p><b>Claude:</b> Three. Acme (applied 17 Sep): nudge Sarah Kim on LinkedIn, two days
+    overdue. Globex: due Thursday, no contact yet. Initech: due Friday.</p>
+    <p><b>You:</b> I can't reach anyone at Globex until Monday. Move it.</p>
+    <p><b>Claude:</b> Row 8, Globex: follow-up date 23 Oct → 27 Oct, and a note in the
+    follow-up log. Write it?</p>
+    <p><b>You:</b> Yes.</p>
+  </div>
+
+  <h2>What it does</h2>
+  <div class="grid">
+    <div class="card"><h3>Follow-ups by your rule</h3><p>10 days after applying, then every 14, weekends moved to Monday; the assistant reminds you what is due.</p></div>
+    <div class="card"><h3>Silent applications</h3><p>Finds what has not answered in weeks and closes only the rows you pick.</p></div>
+    <div class="card"><h3>A real funnel</h3><p>Submitted → replied → screening → interview → offer, by channel, source or month.</p></div>
+    <div class="card"><h3>Safe writes</h3><p>You see the exact cells before anything changes. Backups, an audit log and undo.</p></div>
+  </div>
+  <p>Your spreadsheet stays yours: you keep opening it in Excel or Google Sheets, sorting and
+  editing it. tracker-mcp reads your own headers and dropdowns; it does not impose a template.</p>
+
+  <h2>Where your tracker can live</h2>
+  <div class="wide">
+  <table>
+    <tr><th>Tracker</th><th>What tracker-mcp touches</th></tr>
+    <tr><td>Excel (.xlsx) or CSV file</td><td>That file, a small config next to it, and a backups folder. Nothing leaves your computer.</td></tr>
+    <tr><td>Google Sheets</td><td>Only the spreadsheet you pick in Google's own file picker when you sign in. Nothing else in your Google account.</td></tr>
+  </table>
+  </div>
+
+  <h2>Google Sheets: sign in once, pick your sheet</h2>
+  <p>Run</p>
+  <pre><code>uvx tracker-mcp auth google</code></pre>
+  <p>Your browser opens Google's sign-in page and then Google's file picker. Choose the
+  spreadsheet with your applications. tracker-mcp asks Google for one permission:
+  <strong>see, edit, create and delete only the specific Google Drive files you use with this
+  app</strong> (<code>drive.file</code>). It cannot see your other files, your e-mail or your
+  contacts. The sign-in is saved on your computer only, and you can withdraw it at any time at
+  <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</p>
+  <p>tracker-mcp reads the cells of the spreadsheet you picked and, after your confirmation,
+  updates them, for example sets a status or a follow-up date. It talks to Google directly from
+  your computer; there is no tracker-mcp server, and the developer never receives your data.
+  Details: <a href="privacy.html">privacy policy</a>.</p>
+
+  <h2>Get started</h2>
+  <p>You need <a href="https://docs.astral.sh/uv/getting-started/installation/">uv</a>. Then pick your client:</p>
+  <ul>
+    <li><strong>Claude Code:</strong> <code>/plugin install tracker-mcp --marketplace butyavk/tracker-mcp</code></li>
+    <li><strong>Claude Desktop:</strong> download <code>tracker-mcp-&lt;version&gt;.mcpb</code> from the
+      <a href="https://github.com/butyavk/tracker-mcp/releases">latest release</a>, double-click it and pick your tracker file.</li>
+    <li><strong>Cursor, VS Code and others:</strong> a stdio server with command <code>uvx</code>, argument
+      <code>tracker-mcp</code> and the environment variable <code>TRACKER_PATH</code>.</li>
+  </ul>
+  <p>No tracker yet? <code>uvx tracker-mcp new ~/Documents/job-tracker.xlsx</code> creates one.
+  The full guide is in the <a href="https://github.com/butyavk/tracker-mcp#readme">README</a>.</p>
+
+  <h2>Open source</h2>
+  <p>tracker-mcp is MIT-licensed and developed in the open on
+  <a href="https://github.com/butyavk/tracker-mcp">GitHub</a>. Questions and bugs:
+  <a href="https://github.com/butyavk/tracker-mcp/issues">issues</a>. Security problems: please report
+  them privately as described in <a href="https://github.com/butyavk/tracker-mcp/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+</main>
+<footer>
+  tracker-mcp is an independent open-source project by Ivan Rykov. It is not affiliated with,
+  endorsed or sponsored by Google or Anthropic. Google Sheets is a trademark of Google LLC;
+  Claude is a trademark of Anthropic, PBC.
+  · <a href="privacy.html">Privacy policy</a>
+</footer>
+</body>
+</html>

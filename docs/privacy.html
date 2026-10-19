@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy policy · tracker-mcp</title>
+<meta name="description" content="How tracker-mcp handles your data, including data from your Google account.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <nav>
+    <a href="./">tracker-mcp</a>
+    <a href="privacy.html">Privacy policy</a>
+    <a href="https://github.com/butyavk/tracker-mcp">Source code</a>
+    <a href="https://github.com/butyavk/tracker-mcp/issues">Help</a>
+  </nav>
+  <h1>Privacy policy</h1>
+  <p class="lead">Effective 19 October 2026</p>
+</header>
+<main>
+  <p>tracker-mcp is free, open-source software that runs on your own computer. It connects an
+  AI assistant of your choice to the spreadsheet where you track job applications. This policy
+  explains what data tracker-mcp accesses, how it uses and stores that data, and how you can
+  remove it. It applies to the tracker-mcp program, its Claude plugin and its Claude Desktop
+  extension.</p>
+
+  <p class="note">In short: tracker-mcp has no servers and no telemetry. The developer never
+  receives, sees or stores your data. Everything tracker-mcp reads stays between your computer,
+  the spreadsheet you chose, and the AI assistant you asked.</p>
+
+  <h2>Data tracker-mcp accesses</h2>
+  <h3>A tracker file on your computer</h3>
+  <p>If your tracker is an Excel (.xlsx) or CSV file, tracker-mcp reads and, after your
+  confirmation, writes that file. Next to it, it keeps a small configuration file describing your
+  columns and statuses, and a <code>backups-tracker-mcp</code> folder with copies taken before
+  each change and a log of changes. Nothing is sent over the network.</p>
+
+  <h3>Google user data</h3>
+  <p>If your tracker is in Google Sheets and you sign in with
+  <code>tracker-mcp auth google</code>, tracker-mcp asks Google for a single permission, the
+  <code>https://www.googleapis.com/auth/drive.file</code> scope: access only to the Google Drive
+  files you choose in Google's file picker (or that tracker-mcp creates). With it, tracker-mcp:</p>
+  <ul>
+    <li><strong>reads</strong> the cell values, formulas, number formats and dropdown lists of the
+      spreadsheet you picked, to answer your questions about your applications;</li>
+    <li><strong>writes</strong> cells in that spreadsheet, only after you confirm the exact change,
+      for example a new row, a status or a follow-up date; it then reads the changed cells back to
+      check the write.</li>
+  </ul>
+  <p>tracker-mcp does not access your other Drive files, Gmail, contacts, calendar, or your
+  profile, name or e-mail address.</p>
+
+  <h2>How the data is used</h2>
+  <p>Data from your tracker is used only to provide the features you ask for: answering your
+  questions about your applications, listing follow-ups and inactive applications, computing
+  your funnel, and making the changes you approve. tracker-mcp passes the results to the AI
+  assistant (MCP client) you connected it to and run it from, because that is how it answers
+  you. What the assistant and its model provider do with that information is governed by their
+  own terms and privacy policy, for example Anthropic's for Claude.</p>
+  <p>tracker-mcp does not use your data for advertising, does not sell or rent it, does not
+  share it with data brokers, and does not use it to develop, improve or train artificial
+  intelligence or machine-learning models. No person, including the developer, reads your data.</p>
+  <p>tracker-mcp's use and transfer of information received from Google APIs to any other app
+  will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google
+  API Services User Data Policy</a>, including the Limited Use requirements.</p>
+
+  <h2>Storage and security</h2>
+  <ul>
+    <li><strong>Google sign-in:</strong> a refresh token is stored on your computer in
+      <code>~/.tracker-mcp/google-token.json</code>, readable only by your user account on macOS and
+      Linux. It is never sent anywhere except to Google to obtain access.</li>
+    <li><strong>Backups:</strong> before each change to a Google Sheet, the old and new values of the
+      cells it touches are saved in <code>~/.tracker-mcp/backups/</code> on your computer, so that the
+      change can be undone.</li>
+    <li><strong>In transit:</strong> tracker-mcp talks to Google only over HTTPS, directly from your
+      computer.</li>
+  </ul>
+  <p>The developer operates no server and has no copy of any of this data.</p>
+
+  <h2>Sharing</h2>
+  <p>tracker-mcp does not share your data with anyone. The only places it goes are the ones you
+  set up: your spreadsheet (on your computer or in your Google account) and the AI assistant you
+  use tracker-mcp with.</p>
+
+  <h2>Retention and deletion</h2>
+  <p>Data stays on your computer for as long as you keep it. To remove everything tracker-mcp
+  has stored, delete the <code>~/.tracker-mcp</code> folder and the <code>backups-tracker-mcp</code>
+  folder next to your tracker file. To withdraw tracker-mcp's access to your Google account,
+  remove it at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>;
+  the saved sign-in then stops working.</p>
+
+  <h2>Children</h2>
+  <p>tracker-mcp is a tool for job seekers and is not directed at children under 13.</p>
+
+  <h2>Changes to this policy</h2>
+  <p>Changes are published on this page with a new effective date; the history of every change is
+  in the project's <a href="https://github.com/butyavk/tracker-mcp/commits/main/docs/privacy.html">public repository</a>.</p>
+
+  <h2>Contact</h2>
+  <p>tracker-mcp is developed by Ivan Rykov. Questions about this policy:
+  <a href="https://github.com/butyavk/tracker-mcp/issues">open an issue</a> on GitHub. To report
+  a security problem privately, see <a href="https://github.com/butyavk/tracker-mcp/blob/main/SECURITY.md">SECURITY.md</a>.</p>
+</main>
+<footer>
+  tracker-mcp is an independent open-source project. It is not affiliated with, endorsed or
+  sponsored by Google or Anthropic. · <a href="./">Home</a>
+</footer>
+</body>
+</html>
