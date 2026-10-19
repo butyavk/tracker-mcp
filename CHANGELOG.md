@@ -24,8 +24,12 @@ Added
   `tracker://application/{row}`); titles on the server and every tool.
 - `date_formats` for dates kept as text (US and UK formats are detected by `init`).
 - Config edits apply on the next call, without restarting the client.
-- A Claude Desktop extension (`.mcpb`), a `server.json` for the MCP Registry, and
-  evals that check a model uses the tools right and ignores instructions in cells.
+- A Claude Desktop extension (`.mcpb`), a Claude plugin with a `weekly-review` skill
+  (`/plugin install tracker-mcp --marketplace butyavk/tracker-mcp`), a `server.json`
+  for the MCP Registry, and evals that check a model uses the tools right and ignores
+  instructions in cells.
+- `tracker-mcp auth google` signs in and opens Google's file picker: the server can
+  open only the sheets you pick (scope `drive.file`).
 
 Changed
 - Every write needs the user's yes, enforced by the server: a confirmation dialog

@@ -70,7 +70,14 @@ tracker is in Documents, Desktop or Downloads, see [macOS privacy](#macos-claude
 A one-click Claude Desktop extension (`tracker-mcp-<version>.mcpb`) is attached to each
 [release](https://github.com/butyavk/tracker-mcp/releases): double-click it and pick your file.
 
-**Claude Code:**
+**Claude Code:** as a plugin (the server plus a `weekly-review` skill; it asks for the
+path to your tracker):
+
+```
+/plugin install tracker-mcp --marketplace butyavk/tracker-mcp
+```
+
+or just the server:
 
 ```sh
 claude mcp add tracker -e TRACKER_PATH="$HOME/Documents/job-tracker.xlsx" -- uvx tracker-mcp

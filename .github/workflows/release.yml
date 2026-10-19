@@ -25,6 +25,8 @@ jobs:
           test "$(jq -r .version server.json)" = "$v"
           test "$(jq -r '.packages[0].version' server.json)" = "$v"
           test "$(jq -r .version mcpb/manifest.json)" = "$v"
+          test "$(jq -r .version plugin/.claude-plugin/plugin.json)" = "$v"
+          test "$(jq -r '.mcpServers.tracker.args[0]' plugin/.claude-plugin/plugin.json)" = "tracker-mcp==$v"
           awk -v v="$v" '$1 == "##" && $2 == v {found = 1} END {exit !found}' CHANGELOG.md
       - name: Tests
         run: |

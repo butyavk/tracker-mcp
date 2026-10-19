@@ -36,8 +36,9 @@ confirmation flow in `server.py`. Please keep new writes on that path.
 
 ## Releases
 
-1. Bump the version in `pyproject.toml`, `server.json` (twice) and
-   `mcpb/manifest.json`, add a section to `CHANGELOG.md`, run `uv lock`.
+1. Bump the version in `pyproject.toml`, `server.json` (twice), `mcpb/manifest.json` and
+   `plugin/.claude-plugin/plugin.json` (the version and the `tracker-mcp==` pin), add a
+   section to `CHANGELOG.md`, run `uv lock`.
    `tests/test_packaging.py` checks that they agree.
 2. Tag and push: `git tag v0.3.1 && git push origin v0.3.1`.
 3. `.github/workflows/release.yml` then publishes to PyPI (trusted publishing, no
@@ -45,3 +46,7 @@ confirmation flow in `server.py`. Please keep new writes on that path.
    `.mcpb` extension attached.
 
 `sh mcpb/build.sh` builds the extension locally (needs Node).
+
+`plugin/` is the Claude plugin (the server plus a `weekly-review` skill), installable
+from this repository's marketplace and submittable to Claude's plugin directory at
+claude.ai/directory/manage. Check it with `claude plugin validate ./plugin`.

@@ -1,0 +1,15 @@
+{
+  "name": "tracker-mcp",
+  "description": "tracker-mcp: Claude and your own job-application spreadsheet.",
+  "owner": {
+    "name": "Ivan Rykov",
+    "url": "https://github.com/butyavk"
+  },
+  "plugins": [
+    {
+      "name": "tracker-mcp",
+      "source": "./plugin",
+      "description": "Keep your job-application spreadsheet (Excel or CSV) with Claude: follow-ups, silent applications, a funnel, confirmed writes."
+    }
+  ]
+}

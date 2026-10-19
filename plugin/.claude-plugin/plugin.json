@@ -1,0 +1,35 @@
+{
+  "name": "tracker-mcp",
+  "displayName": "Job-application tracker",
+  "version": "0.3.0",
+  "description": "Keep your job-application spreadsheet (Excel or CSV) with Claude: follow-ups due, silent applications, a reply/interview funnel, and changes written only after your yes.",
+  "author": {
+    "name": "Ivan Rykov",
+    "url": "https://github.com/butyavk"
+  },
+  "homepage": "https://github.com/butyavk/tracker-mcp",
+  "repository": "https://github.com/butyavk/tracker-mcp",
+  "license": "MIT",
+  "keywords": ["job search", "job tracker", "applications", "excel", "csv", "follow-ups"],
+  "icon": "./icon.png",
+  "documentationUrl": "https://github.com/butyavk/tracker-mcp#readme",
+  "supportUrl": "https://github.com/butyavk/tracker-mcp/issues",
+  "privacyPolicyUrl": "https://github.com/butyavk/tracker-mcp/blob/main/PRIVACY.md",
+  "userConfig": {
+    "tracker": {
+      "type": "file",
+      "title": "Your tracker",
+      "description": "The .xlsx or .csv file with your applications, one row each. On first start the server writes a small config next to it.",
+      "required": true
+    }
+  },
+  "mcpServers": {
+    "tracker": {
+      "command": "uvx",
+      "args": ["tracker-mcp==0.3.0"],
+      "env": {
+        "TRACKER_PATH": "${user_config.tracker}"
+      }
+    }
+  }
+}

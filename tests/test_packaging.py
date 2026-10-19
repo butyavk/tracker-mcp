@@ -11,7 +11,9 @@ def test_versions_and_names_match():
     version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
     server = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
     manifest = json.loads((ROOT / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
+    plugin = json.loads((ROOT / "plugin" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert server["version"] == server["packages"][0]["version"] == manifest["version"] == version
+    assert plugin["version"] == version and plugin["mcpServers"]["tracker"]["args"] == [f"tracker-mcp=={version}"]
     headings = [line.split()[1] for line in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
                 if line.startswith("## ")]
     assert version in headings
