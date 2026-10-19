@@ -894,6 +894,98 @@ class Tracker:
 
         return self._write("reschedule_followup", mutate, expected_version, dry_run)
 
+    # fields edit_application leaves to the tools that know their side effects
+    _EDIT_ELSEWHERE = {
+        "status": "set_status (it also moves the furthest stage, fills the reply date and cancels a "
+                  "pending follow-up)",
+    }
+
+    def edit_application(self, row: int, fields: dict[str, Any], reason: str, *,
+                         expected_version: str | None = None, dry_run: bool = False) -> dict[str, Any]:
+        """Correct fields of one row by hand: a wrong date, a typo, the furthest stage, a
+        custom column. `fields`: field name -> new value (null clears the cell). Dates are
+        checked and written as dates; the reason, with what changed, goes to the notes."""
+        cfg = self.cfg
+        if not reason.strip():
+            raise TrackerError("Say why the row is corrected; the reason goes to the notes.")
+        if not fields:
+            raise TrackerError("Name at least one field to change.")
+        unknown = [f for f in fields if f not in cfg.columns]
+        if unknown:
+            raise TrackerError(f"Unknown field(s) {', '.join(unknown)}. Fields of this tracker: "
+                               + ", ".join(f for f in cfg.columns if f not in self._EDIT_ELSEWHERE))
+        for f in fields:
+            if f in self._EDIT_ELSEWHERE:
+                raise TrackerError(f"Change {f} with {self._EDIT_ELSEWHERE[f]}.")
+        today = self.today()
+        new: dict[str, Any] = {}
+        for f, v in fields.items():
+            v = v.strip() if isinstance(v, str) else v
+            if v in (None, ""):
+                if f == "company":
+                    raise TrackerError("The company cannot be empty: it is how a row is found.")
+                new[f] = None
+            elif cfg.is_date(f):
+                if str(v) == cfg.values.no_date:
+                    new[f] = cfg.values.no_date
+                    continue
+                d = self._date(v)
+                if d is None:
+                    raise TrackerError(f"{f}: «{v}» is not a date (use YYYY-MM-DD).")
+                if f in ("applied_on", "replied_on") and d > today:
+                    raise TrackerError(f"{f}: {d.isoformat()} is in the future.")
+                new[f] = d
+            elif f == "applied":
+                yes = str(v).casefold() in (cfg.values.yes.casefold(), "true", "yes", "да")
+                no = str(v).casefold() in (cfg.values.no.casefold(), "false", "no", "нет")
+                if not (yes or no):
+                    raise TrackerError(f"applied: «{v}» — use «{cfg.values.yes}» or «{cfg.values.no}».")
+                new[f] = cfg.values.yes if yes else cfg.values.no
+            elif f == "reached":
+                if self._stage(v) is None:
+                    raise TrackerError(f"reached: «{v}» is not a stage. Stages: "
+                                       + ", ".join(w for words in cfg.statuses.stages.values() for w in words))
+                new[f] = v   # written as the column's own word below
+            else:
+                new[f] = str(v)
+
+        def mutate(wb: Workbook, ws: Worksheet, lay: Layout):
+            self._check_row(ws, lay, row)
+            missing = [f for f in new if f not in lay.cols]
+            if missing:
+                raise TrackerError(f"Not in the sheet: {', '.join(missing)} (see describe_tracker).")
+            rec = self._record(ws, lay, row)
+            applied = new.get("applied_on", self._date(rec.get("applied_on")))
+            replied = new.get("replied_on", self._date(rec.get("replied_on")))
+            if isinstance(applied, date) and isinstance(replied, date) and replied < applied:
+                raise TrackerError(f"The reply date {replied.isoformat()} would be before the submit date "
+                                   f"{applied.isoformat()}.")
+            warnings = []
+            changes: list[Change] = []
+            for f, v in new.items():
+                if f == "reached" and v is not None:
+                    v = self._stage_word(ws, lay, self._stage(v))
+                    old = self._stage(ws.cell(row, lay.cols["reached"]).value)
+                    if old is not None and self._stage(v) < old:
+                        warnings.append(f"The furthest stage goes back from «{rec.get('reached')}» to «{v}».")
+                if f == "followup_on" and isinstance(v, date):
+                    if v.weekday() >= 5 and cfg.followups.weekend_to_monday:
+                        warnings.append(f"{v.isoformat()} is a {v.strftime('%A')}; the follow-up rule "
+                                        "would use Monday.")
+                    if rec["status"] in self.closed:
+                        warnings.append(f"The application is closed ({rec['status']}).")
+                self._set(ws, lay, row, f, v, changes)
+            if changes and cfg.has("notes") and "notes" not in new:
+                def shown(v: Any) -> Any:
+                    return "∅" if v in (None, "") else v
+                what = "; ".join(f"{lay.headers.get(lay.cols[c.field], c.field)} «{shown(c.old)}» "
+                                 f"→ {shown(self._show(c.new, c.field))}" for c in changes)
+                self._set(ws, lay, row, "notes", self._append(ws.cell(row, lay.cols["notes"]).value,
+                                                              self._stamp(f"{what} — {reason.strip()}")), changes)
+            return row, changes, [], warnings
+
+        return self._write("edit_application", mutate, expected_version, dry_run)
+
     def undo_last_write(self, expected_version: str | None = None, dry_run: bool = False) -> dict[str, Any]:
         """Restore the backup of the last write, only if nothing changed since."""
         entries = self._audit_entries()

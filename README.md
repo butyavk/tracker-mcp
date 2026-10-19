@@ -242,6 +242,7 @@ server's environment. The server can then reach only the sheets you share with i
 | `set_status` | write | New status from your dropdown; a closed status cancels the pending follow-up; the first reply fills the reply date (`on`, default today) |
 | `log_followup` | write | Log a sent follow-up, schedule the next one or close |
 | `reschedule_followup` | write | Move the next follow-up, or plan none, when nothing was sent (no contact yet, waiting for credits) |
+| `edit_application` | write | Correct fields of one row: a wrong or missing date, a typo, the furthest stage, a custom column; dates are checked, the reason goes to the notes |
 | `close_stale` | write | Close stale applications (or chosen rows) in one write, one backup, one undo step |
 | `fix_tracker` | write | Fix what `check_tracker` can fix, in one write, one backup, one undo step |
 | `export_followups_calendar` | file | The open follow-ups as an `.ics` file next to the tracker (the tracker is not touched) |

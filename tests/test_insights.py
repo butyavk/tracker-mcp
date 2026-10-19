@@ -19,7 +19,7 @@ from tracker_mcp.tracker import Tracker, TrackerError, company_key
 
 TODAY = date(2026, 10, 19)   # a Monday
 COLS = {"company": "B", "role": "C", "applied_on": "H", "channel": "I", "status": "J", "reached": "K",
-        "response": "N", "replied_on": "O", "followup_on": "P", "followup_log": "R"}
+        "response": "N", "replied_on": "O", "followup_on": "P", "followup_log": "R", "notes": "S"}
 
 
 def build(tmp_path, rows):

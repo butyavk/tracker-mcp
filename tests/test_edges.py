@@ -3,8 +3,10 @@ what resets the silence clock, and the e-mail cases that matched the wrong row."
 
 from datetime import date, datetime
 
+import anyio
 import openpyxl
 import pytest
+from mcp import Client
 
 from tracker_mcp import server
 from tracker_mcp.config import load_config
@@ -243,3 +245,68 @@ def test_calendar_ids_and_carriage_returns(tmp_path):
                    "description": "one\r\ntwo\rthree_x000D_\nfour_x000D_five"}])
     assert "\r" not in ics.replace("\r\n", "")
     assert "DESCRIPTION:one\\ntwo\\nthree\\nfour\\nfive" in ics.replace("\r\n ", "")
+
+
+# ---------------------------------------------------------------- edit_application
+
+def test_edit_corrects_dates_and_says_why_in_the_notes(tmp_path):
+    t = build(tmp_path, [{"company": "Yadda", "role": "Head of Eng", "applied_on": "2026-08", "status": "Rejected",
+                          "notes": "Rejected after the tech interview"}])
+    before = t.version()
+    plan = t.edit_application(2, {"applied_on": "2026-09-01", "replied_on": "2026-09-02"},
+                              "from the e-mails", dry_run=True)
+    text = server.describe_plan("edit_application", plan)
+    assert "applied_on: 2026-08 → 2026-09-01" in text and "replied_on: ∅ → 2026-09-02" in text
+    t.edit_application(2, {"applied_on": "2026-09-01", "replied_on": "2026-09-02"}, "from the e-mails")
+    ws = openpyxl.load_workbook(t.path)["Applications"]
+    assert ws["H2"].value == datetime(2026, 9, 1) and ws["O2"].value == datetime(2026, 9, 2)
+    rec = t.get_application(row=2)["applications"][0]
+    assert rec["notes"].startswith("Rejected after the tech interview | 2026-10-19: ")
+    assert "«2026-08» → 2026-09-01" in rec["notes"] and "«∅» → 2026-09-02 — from the e-mails" in rec["notes"]
+    t.undo_last_write()
+    assert t.version() == before
+
+
+def test_edit_refuses_what_another_tool_or_the_calendar_says_no_to(tmp_path):
+    t = build(tmp_path, [{"company": "Acme", "role": "EM", "applied_on": datetime(2026, 9, 10), "status": "Applied"}])
+    for fields, reason, match in [
+            ({"status": "Rejected"}, "x", "set_status"),
+            ({"colour": "red"}, "x", "Unknown field"),
+            ({"applied_on": "2026-11-01"}, "x", "future"),
+            ({"replied_on": "2026-09-01"}, "x", "before the submit date"),
+            ({"applied_on": "someday"}, "x", "not a date"),
+            ({"company": ""}, "x", "cannot be empty"),
+            ({"reached": "Lunch"}, "x", "not a stage"),
+            ({"role": "Director"}, " ", "Say why"),
+            ({}, "x", "at least one")]:
+        with pytest.raises(TrackerError, match=match):
+            t.edit_application(2, fields, reason, dry_run=True)
+    with pytest.raises(TrackerError, match="not an application row"):
+        t.edit_application(9, {"role": "x"}, "x", dry_run=True)
+
+
+def test_edit_warns_but_writes_odd_values(tmp_path):
+    t = build(tmp_path, [{"company": "Acme", "role": "EM", "applied_on": datetime(2026, 9, 10), "status": "Interview",
+                          "reached": "Interview"}])
+    plan = t.edit_application(2, {"reached": "screening", "followup_on": "2026-10-25"}, "typo", dry_run=True)
+    assert any("goes back" in w for w in plan["warnings"]) and any("Sunday" in w for w in plan["warnings"])
+    res = t.edit_application(2, {"reached": "screening", "notes": "rewritten"}, "typo")
+    assert {c["field"]: c["new"] for c in res["changes"]} == {"reached": "Screening", "notes": "rewritten"}
+
+
+def test_edit_over_mcp_needs_a_yes(tmp_path):
+    server._tracker = build(tmp_path, [{"company": "Acme", "role": "EM", "status": "Applied",
+                                        "applied_on": "2026-09"}])
+
+    async def go():
+        async with Client(server.mcp) as c:
+            tools = {x.name: x for x in (await c.list_tools()).tools}
+            assert tools["edit_application"].annotations.destructive_hint is True
+            args = {"row": 2, "fields": {"applied_on": "2026-09-03"}, "reason": "from the confirmation"}
+            res = await c.call_tool("edit_application", args)
+            assert res.is_error and "confirmation" in res.content[0].text
+            preview = await c.call_tool("edit_application", {**args, "dry_run": True})
+            res = await c.call_tool("edit_application", {**args, "confirm": preview.structured_content["confirm"]})
+            assert not res.is_error and res.structured_content["changes"][0]["new"] == "2026-09-03"
+
+    anyio.run(go)

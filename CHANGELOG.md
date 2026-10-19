@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.1 — 2026-10-19
+
+Added
+- `edit_application`: correct fields of one row by hand — a wrong or missing date, a
+  typo in the company or role, the furthest stage, the link, a custom column — with
+  the same preview, confirmation, backup and undo as the other writes. Dates are
+  checked (a submit or reply date cannot be in the future, a reply cannot come before
+  the submit) and written as dates; the reason and what changed go to the notes. The
+  status stays with `set_status`, follow-ups with `log_followup` and
+  `reschedule_followup`, which keep the related columns in step.
+
 ## 0.4.0 — 2026-10-19
 
 What a hand-kept tracker cannot do by itself: find its own drift, remember when each

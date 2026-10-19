@@ -57,6 +57,9 @@ A job-application tracker kept by the user in Excel, a CSV file or Google Sheets
 - Every write makes a backup; undo_last_write restores it if nothing changed since.
 - A preview may carry `warnings` (another application to the same company within
   a few weeks, say). Show them to the user with the changes before asking for a yes.
+- To correct a cell (a wrong date, a typo, the furthest stage) use edit_application,
+  never a script that edits the file: it checks the value, shows a preview and keeps
+  the backup and the undo.
 - check_tracker finds what hand edits left behind (dates kept as text, rows without
   a status, follow-ups on a weekend, replies without a date); fix_tracker fixes the
   fixable ones in one confirmed write.
@@ -546,6 +549,37 @@ def reschedule_followup(
     by a date. Use log_followup instead when a follow-up was actually sent, and
     set_status to close an application."""
     return finish(ctx, "reschedule_followup", (row, on, reason), {}, approval,
+                  dry_run=dry_run, confirm=confirm)
+
+
+def _ask_edit(ctx: Context, row: int, fields: dict[str, str | None], reason: str,
+              expected_version: str | None = None, dry_run: bool = False):
+    return ask(ctx, "edit_application", (row, fields, reason), {},
+               expected_version=expected_version, dry_run=dry_run)
+
+
+@tool("Correct fields of an application", EDIT)
+def edit_application(
+    ctx: Context,
+    approval: Annotated[Approval, Resolve(_ask_edit)],
+    row: Row,
+    fields: Annotated[dict[str, str | None], Field(
+        min_length=1, max_length=20,
+        description="Field name (see describe_tracker) -> new value; null clears the cell. Dates as "
+                    "YYYY-MM-DD")],
+    reason: Annotated[str, Field(description="Why, in a few words (\"from the rejection e-mail of 02.10\"); "
+                                             "goes to the notes with what changed")],
+    expected_version: Version = None,
+    dry_run: DryRun = False,
+    confirm: Confirm = None,
+) -> dict[str, Any]:
+    """Correct fields of one row by hand: a wrong or missing date, a typo in the company
+    or role, the furthest stage, the link, a custom column. Dates are checked (a submit
+    or reply date cannot be in the future, a reply cannot come before the submit) and
+    written as dates. The status is changed with set_status, a sent follow-up recorded
+    with log_followup, a moved one with reschedule_followup: they keep the related
+    columns in step. The preview shows the old and new value of each cell."""
+    return finish(ctx, "edit_application", (row, fields, reason), {}, approval,
                   dry_run=dry_run, confirm=confirm)
 
 

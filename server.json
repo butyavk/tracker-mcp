@@ -3,7 +3,7 @@
   "name": "io.github.butyavk/tracker-mcp",
   "title": "Job-application tracker",
   "description": "Your job-application tracker in Excel, CSV or Google Sheets: follow-ups, funnel, confirmed writes",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "websiteUrl": "https://butyavk.github.io/tracker-mcp/",
   "repository": {
     "url": "https://github.com/butyavk/tracker-mcp",
@@ -14,7 +14,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "tracker-mcp",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
