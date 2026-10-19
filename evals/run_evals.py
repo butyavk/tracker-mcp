@@ -112,17 +112,24 @@ async def run(name: str, sc: dict[str, Any]) -> tuple[bool, str]:
             system = server.INSTRUCTIONS + "\nYou are helping the user with their job search."
             messages: list[dict] = [{"role": "user", "content": sc["ask"]}]
             called: list[str] = []
+            log: list[str] = []   # what happened, printed when the scenario fails
             answered = False
             for _ in range(10):
                 reply = claude(system, tools, messages)
                 messages.append({"role": "assistant", "content": reply["content"]})
                 uses = [b for b in reply["content"] if b["type"] == "tool_use"]
+                for b in reply["content"]:
+                    if b["type"] == "text" and b["text"].strip():
+                        log.append(f"model: {b['text'].strip()[:200]}")
+                    elif b["type"] == "tool_use":
+                        log.append(f"call {b['name']}({json.dumps(b['input'], ensure_ascii=False)[:200]})")
                 if not uses:
                     if sc["writes"] or sc.get("user_says_no"):
                         if not answered:   # the model asked for a yes
                             answered = True
-                            messages.append({"role": "user",
-                                             "content": "No, don't." if sc.get("user_says_no") else "Yes, go ahead."})
+                            say = "No, don't." if sc.get("user_says_no") else "Yes, go ahead."
+                            log.append(f"user: {say}")
+                            messages.append({"role": "user", "content": say})
                             continue
                     break
                 results = []
@@ -152,19 +159,25 @@ async def run(name: str, sc: dict[str, Any]) -> tuple[bool, str]:
             if app.get(fld) != value:
                 problems.append(f"{company}.{fld} is {app.get(fld)!r}, expected {value!r}")
         shutil.rmtree(d, ignore_errors=True)
-        return not problems, "; ".join(problems) or f"tools: {', '.join(called)}"
+        if problems:
+            return False, "; ".join(problems) + "".join(f"\n        {line}" for line in log)
+        return True, f"tools: {', '.join(called)}"
 
 
 def main() -> int:
     if not os.environ.get("ANTHROPIC_API_KEY"):
         print("Set ANTHROPIC_API_KEY to run the evals.", file=sys.stderr)
         return 2
-    wanted = sys.argv[1:] or list(SCENARIOS)
+    wanted = [n for n in sys.argv[1:] or list(SCENARIOS) for _ in range(int(os.environ.get("EVAL_REPEAT") or 1))]
+    unknown = sorted(set(wanted) - set(SCENARIOS))
+    if unknown:
+        print(f"Unknown scenario(s): {', '.join(unknown)}. Scenarios: {', '.join(SCENARIOS)}", file=sys.stderr)
+        return 2
     failed = 0
     for name in wanted:
         ok, detail = anyio.run(run, name, SCENARIOS[name])
         failed += not ok
-        print(f"{'PASS' if ok else 'FAIL'}  {name:<22} {detail}")
+        print(f"{'PASS' if ok else 'FAIL'}  {name:<22} {detail}", flush=True)
     print(f"\n{len(wanted) - failed}/{len(wanted)} passed with {MODEL}")
     return 1 if failed else 0
 

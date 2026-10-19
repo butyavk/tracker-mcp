@@ -17,6 +17,9 @@ on:
       scenarios:
         description: Scenario names separated by spaces (empty = all)
         default: ""
+      repeat:
+        description: Run each scenario this many times
+        default: "1"
 
 concurrency:
   group: evals-${{ github.ref }}
@@ -33,7 +36,9 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           EVAL_MODEL: ${{ inputs.model || 'claude-haiku-5-5' }}
           SCENARIOS: ${{ inputs.scenarios }}
+          EVAL_REPEAT: ${{ inputs.repeat || '1' }}
         run: |
+          set -o pipefail
           if [ -z "$ANTHROPIC_API_KEY" ]; then
             echo "::notice::No ANTHROPIC_API_KEY secret in this repository: evals skipped."
             exit 0
