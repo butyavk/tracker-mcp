@@ -24,31 +24,66 @@ what happened, with your yes for every change.
 Also: "Which channel gets me the most replies?", "Initech rejected me", "I applied to
 Hooli via a referral today", "close everything that hasn't answered in 45 days".
 
-### Why not just give Claude the spreadsheet?
+### Why a server? Can't Claude just do this?
 
-Claude can already read a spreadsheet you attach, and its Google Drive connector can
-open your Sheets. tracker-mcp adds what a job search needs on top:
+Partly it can, and for a one-off question you don't need tracker-mcp: attach the
+spreadsheet and ask. Claude can read a file you attach. With access to your files (Claude
+Code, or Claude working on your computer) it can also edit the file by writing a small
+script. With the Google Drive connector it can open and edit your Sheets. What none of these
+gives you is the same rules and the same safety in every conversation. Here is how they compare:
 
-- **Rules, not guesses.** Follow-up dates by your rule (10 days after applying, then
-  every 14, weekends moved to Monday), applications that went silent, and a funnel
-  (submitted → replied → screening → interview → offer) by channel, source or month
-  that remembers the furthest stage an application reached.
-- **Safe writes.** You see the exact cells that will change, and the server, not the
-  model, checks your yes. A backup before every write, an audit log, undo; nothing is
-  written while Excel has the file open or after someone else changed it.
-- **Always there.** The same tracker in every chat and every session, with no upload,
-  so several conversations (or a scheduled weekly review) can keep one tracker up to date.
+| | Attach the file | Claude edits the file itself (file access or the Drive connector) | tracker-mcp |
+|---|---|---|---|
+| Reads your tracker | A copy, uploaded again in each chat | Yes | Yes |
+| Changes your tracker | Hands you a new file to download and swap in | Yes, with code it writes for this one change | Yes, with tested tools that change only the cells they show you |
+| Asks before writing | If the model remembers | If the model remembers | The server refuses any write you have not confirmed |
+| Backup, undo, change log | No | If the model remembers | Every write |
+| Keeps dropdowns, formulas, filters | Not guaranteed | Not guaranteed | Kept, and extended to new rows |
+| Follow-up dates, silent applications, funnel | Worked out again in each chat | Worked out again in each chat | One rule in code: the same answer every time |
+| Excel has the file open, or someone else just changed it | Not noticed | Not noticed | The write is refused |
+| What the model has to read | The whole sheet | The whole sheet, or code to parse it | Only the rows the answer needs |
+| Works in | Any Claude chat | Where Claude can run code on your files | Any MCP client (Claude Desktop, Claude Code, Cursor, ...); not claude.ai in a browser or on a phone |
+
+Why that matters for a job search:
+
+- **Rules belong in code, not in a prompt.** "Which follow-ups are due?" is date
+  arithmetic with your rule: 10 days after applying, then every 14, weekends moved to Monday,
+  nothing for closed applications. A model can do it, but each chat works it out from
+  scratch, and small slips creep in: a follow-up for a rejected application, a date on a
+  Sunday, a status spelled differently from your dropdown. In tracker-mcp the rule is code
+  covered by tests, so every chat and every client gets the same answer. The same goes
+  for silent applications and for the funnel. The funnel remembers the furthest stage an
+  application reached, so an interview still counts after the rejection that followed it.
+- **Safety the model cannot skip.** You see the exact cells that will change before
+  anything is written, and your yes is checked by the server, not taken on the model's
+  word. A backup comes before every write, and you get a change log and undo.
+  The text you paste into notes (job posts, e-mails) cannot turn into a formula or talk the
+  model into writing something you did not approve.
+- **Less to read, so faster and cheaper.** A real tracker of 100 applications and 25
+  columns is about 160,000 characters of text. "Which follow-ups are due in the next three
+  days?" answered through tracker-mcp returned 16 rows, about 10,000 characters.
+- **The same tracker everywhere.** No upload: every chat, a scheduled weekly review and
+  every client you use work on the same file, and each change lands in it right away.
 
 Your spreadsheet stays yours: you keep opening it in Excel or Sheets, sorting and
 editing it. Nothing about a particular tracker is in the code; the server reads your
 headers and dropdowns and keeps what it learned in a small config file.
+
+You don't need tracker-mcp if you only want a one-time analysis of your applications,
+if you rarely update the tracker, or if you only use Claude in a browser or on your phone
+(a server like this runs on your computer).
 
 ## Quick start
 
 You need [uv](https://docs.astral.sh/uv/getting-started/installation/), which also
 fetches Python for you. Pick your client:
 
-**Claude Desktop.** Open Settings → Developer → Edit Config and add:
+**Claude Desktop, the easy way:** download `tracker-mcp-<version>.mcpb` from the
+[latest release](https://github.com/butyavk/tracker-mcp/releases), double-click it,
+press **Install**, choose your tracker file in *Your tracker*, **Save**, and switch the
+extension on. On a Mac this also avoids the [Documents folder problem](#macos-claude-desktop-and-your-documents-folder).
+
+**Claude Desktop, by hand.** Open Settings → Developer → Edit Config and add:
 
 ```json
 {
@@ -66,9 +101,6 @@ On Windows the path looks like `C:\\Users\\you\\Documents\\job-tracker.xlsx`
 (double backslashes in JSON). Restart Claude Desktop. If Claude can't find `uvx`,
 put its full path in `command` (`which uvx` / `where uvx`). On macOS, if your
 tracker is in Documents, Desktop or Downloads, see [macOS privacy](#macos-claude-desktop-and-your-documents-folder).
-
-A one-click Claude Desktop extension (`tracker-mcp-<version>.mcpb`) is attached to each
-[release](https://github.com/butyavk/tracker-mcp/releases): double-click it and pick your file.
 
 **Claude Code:** as a plugin (the server plus a `weekly-review` skill; it asks for the
 path to your tracker):
@@ -298,7 +330,14 @@ bracket or dash ("Ashby (direct form)" → "Ashby"), or by substrings you list i
 
 ## macOS: Claude Desktop and your Documents folder
 
-Claude Desktop starts local servers without its own privacy permissions. If your
+**The easy way: use the Claude Desktop extension** (`tracker-mcp-<version>.mcpb` from
+the [releases](https://github.com/butyavk/tracker-mcp/releases)). Claude Desktop runs an
+extension under its own permissions, so a tracker in Documents works: in our test
+(Claude Desktop 2.42304, October 2026) the extension read a tracker in `~/Documents`
+with nothing else to set up. If macOS asks whether Claude may access the folder, allow it.
+
+The rest of this section is about adding the server to Claude Desktop's config by hand.
+Claude Desktop starts such servers without its own privacy permissions. If your
 tracker is in Documents, Desktop or Downloads, the server may fail with "Operation
 not permitted" in its log (Settings → Developer), and
 macOS never shows a prompt. Full Disk Access for Claude does not change that.
