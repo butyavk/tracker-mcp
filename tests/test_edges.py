@@ -429,3 +429,54 @@ def test_add_column_over_mcp_and_the_next_call_sees_the_new_config(tmp_path, mon
 
     anyio.run(go)
     server._tracker, server._watch = None, None
+
+
+def test_add_column_with_a_dropdown(tmp_path):
+    from tracker_mcp.config import config_path
+    from tracker_mcp.tracker import dropdown_values
+    t = build(tmp_path, [{"company": "Acme", "role": "EM", "status": "Applied"}])
+    t = Tracker(t.path, config=t.cfg, today=lambda: TODAY, config_file=config_path(t.path))
+    with pytest.raises(TrackerError, match="without commas"):
+        t.add_column("Priority", options=["High, very"], dry_run=True)
+    with pytest.raises(TrackerError, match="date column has no dropdown"):
+        t.add_column("Interview on", kind="date", options=["x"], dry_run=True)
+    plan = t.add_column("Priority 2", options=["High", "Low", "High"], dry_run=True)
+    assert "dropdown High, Low" in server.describe_plan("add_column", plan)
+    t.add_column("Priority 2", options=["High", "Low"])
+    ws = openpyxl.load_workbook(t.path)["Applications"]
+    reach = max(r.max_row for dv in ws.data_validations.dataValidation for r in dv.sqref.ranges)
+    assert dropdown_values(ws, 20) == ["High", "Low"] and reach > 2      # as far as the status dropdown
+
+
+def test_a_furthest_stage_column_gets_the_stages(tmp_path):
+    import re as _re
+
+    from tracker_mcp.config import config_path
+    from tracker_mcp.tracker import dropdown_values
+    path, _ = new_tracker(tmp_path / "jobs.xlsx")
+    cfg_file = config_path(path)
+    cfg_file.write_text(_re.sub(r"(?m)^reached\s*=.*\n", "", cfg_file.read_text(encoding="utf-8")), encoding="utf-8")
+    t = Tracker(path, config=load_config(path), today=lambda: TODAY, config_file=cfg_file)
+    t.add_column("Дошли до", field="reached")
+    ws = openpyxl.load_workbook(path)["Applications"]
+    assert dropdown_values(ws, ws.max_column) == ["Screening", "Interview", "Offer"]
+
+
+def test_calendar_events_carry_an_id_line_for_the_clients_calendar_tool(tmp_path):
+    server._tracker = build(tmp_path, [
+        {"company": "Acme", "role": "EM", "applied_on": datetime(2026, 9, 1), "status": "Applied",
+         "followup_on": datetime(2026, 10, 21)}])
+
+    async def go():
+        async with Client(server.mcp) as c:
+            tools = {x.name: x for x in (await c.list_tools()).tools}
+            assert tools["calendar_events"].annotations.read_only_hint is True
+            res = (await c.call_tool("calendar_events", {"days": 30})).structured_content
+            ev = res["events"][0]
+            assert ev["date"] == "2026-10-21" and ev["description"].endswith(f"tracker-mcp id: {ev['uid']}")
+            text = (await c.get_prompt("sync_calendar", {"days": "30"})).messages[0].content.text
+            assert "calendar_events(days=30)" in text and "never other events" in text
+
+    anyio.run(go)
+    ics = to_ics(followup_events(server._tracker)[0])
+    assert "tracker-mcp id: " in ics.replace("\r\n ", "")

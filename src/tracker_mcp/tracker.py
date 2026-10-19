@@ -35,6 +35,7 @@ from openpyxl.cell.cell import MergedCell
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook.workbook import Workbook
 from openpyxl.worksheet.cell_range import MultiCellRange
+from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .config import Config, load_config_file, parse_config, with_column
@@ -994,6 +995,7 @@ class Tracker:
         return self._write("edit_application", mutate, expected_version, dry_run)
 
     def add_column(self, header: str, *, field: str | None = None, kind: str = "text",
+                   options: list[str] | None = None,
                    expected_version: str | None = None, dry_run: bool = False) -> dict[str, Any]:
         """A new column after the last one, with the header styled like its neighbour.
         `field` also maps it in the config ([columns] field = "header"), so the tools use
@@ -1023,6 +1025,17 @@ class Tracker:
             if cfg.is_date(field) or field.endswith("_on"):
                 kind = "date"
         config_line = f"{field} = {json.dumps(header, ensure_ascii=False)}" if field else None
+        if options is None and field == "reached":   # the furthest stage: one word per stage
+            options = [words[0] for words in cfg.statuses.stages.values() if words]
+        if options is not None:
+            options = list(dict.fromkeys(str(o).strip() for o in options if str(o).strip()))
+            if kind == "date":
+                raise TrackerError("A date column has no dropdown.")
+            if not options or any("," in o or '"' in o for o in options):
+                raise TrackerError("Dropdown options: at least one, without commas or quotes.")
+            if len(",".join(options)) > 255:
+                raise TrackerError("Excel keeps a dropdown typed in place to 255 characters; use fewer or "
+                                   "shorter options.")
 
         def mutate(wb: Workbook, ws: Worksheet, lay: Layout):
             if any(h.casefold() == header.casefold() for h in lay.headers.values()):
@@ -1063,6 +1076,18 @@ class Tracker:
                 if m and m.group(3) == prev_letter:
                     ws.auto_filter.ref = f"{m.group(1)}{m.group(2)}:{letter}{m.group(4)}"
                     notes.append(f"filter now {ws.auto_filter.ref}")
+                if options:
+                    # as far down as the sheet's other dropdowns reach, so new rows have it too
+                    reach = max([lay.last_row, lay.header_row + 1] + [
+                        rng.max_row for dv in ws.data_validations.dataValidation for rng in dv.sqref.ranges])
+                    dv = DataValidation(type="list", formula1='"' + ",".join(options) + '"', allow_blank=True)
+                    dv.add(f"{letter}{lay.header_row + 1}:{letter}{reach}")
+                    ws.add_data_validation(dv)
+                    notes.append(f"dropdown {', '.join(options)} in {letter}{lay.header_row + 1}:{letter}{reach}")
+            elif options:
+                notes.append("no dropdown: " + ("a CSV file has none" if self.store.kind == "csv" else
+                                                "add it in Google Sheets (Data → Data validation): "
+                                                + ", ".join(options)))
             return lay.header_row, changes, notes
 
         def write_config() -> dict[str, Any]:
@@ -1078,7 +1103,8 @@ class Tracker:
 
         result = self._write("add_column", mutate, expected_version, dry_run, after_save=write_config)
         result["column"] = {"header": header, "kind": kind, **({"field": field, "config_line": config_line}
-                                                                if field else {})}
+                                                                if field else {}),
+                            **({"options": options} if options else {})}
         return result
 
     def undo_last_write(self, expected_version: str | None = None, dry_run: bool = False) -> dict[str, Any]:

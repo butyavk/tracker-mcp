@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from .tracker import Tracker
 
 SILENCE_STEPS = (7, 14, 21, 30, 45, 60)
+EVENT_MARK = "tracker-mcp id:"   # the last line of each follow-up event's description
 
 
 def _stats(days: list[int]) -> dict[str, Any]:
@@ -125,7 +126,9 @@ def followup_events(t: Tracker, days: int = 60) -> tuple[list[dict[str, Any]], s
         if rec.get("followup_log"):
             lines.append(f"Log: …{str(rec['followup_log'])[-200:]}")
         key = f"{t.store.label}|{rec['company']}|{rec.get('role')}|{rec.get('num') or rec['row']}"
-        events.append({"uid": hashlib.sha256(key.encode()).hexdigest()[:24] + "@tracker-mcp",
+        uid = hashlib.sha256(key.encode()).hexdigest()[:24] + "@tracker-mcp"
+        lines.append(f"{EVENT_MARK} {uid}")   # finds the event again in a calendar: update, not duplicate
+        events.append({"uid": uid,
                        "date": (today if overdue else due).isoformat(), "due": due.isoformat(),
                        "overdue": overdue, "row": rec["row"], "title": ("Overdue " if overdue else "") + title,
                        "description": "\n".join(lines)})

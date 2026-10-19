@@ -58,6 +58,7 @@
     {"name": "add_column", "description": "Add a column at the end and map it in the config (asks you first)"},
     {"name": "close_stale", "description": "Close applications with no reply (asks you first)"},
     {"name": "fix_tracker", "description": "Fix the issues check_tracker found, in one write (asks you first)"},
+    {"name": "calendar_events", "description": "The open follow-ups as calendar events, for your own calendar tool"},
     {"name": "export_followups_calendar", "description": "Write the open follow-ups as an .ics file for your calendar"},
     {"name": "undo_last_write", "description": "Undo the server's last write (asks you first)"}
   ],

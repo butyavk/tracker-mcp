@@ -246,14 +246,16 @@ server's environment. The server can then reach only the sheets you share with i
 | `add_column` | write | Add a column after the last one, styled like its neighbour, and map it in the config (`replied_on`, `reached`, your own field); undo removes both |
 | `close_stale` | write | Close stale applications (or chosen rows) in one write, one backup, one undo step |
 | `fix_tracker` | write | Fix what `check_tracker` can fix, in one write, one backup, one undo step |
+| `calendar_events` | read | The open follow-ups as all-day events with a stable id line, so the client's calendar tool can add, move and remove them without duplicates |
 | `export_followups_calendar` | file | The open follow-ups as an `.ics` file next to the tracker (the tracker is not touched) |
 | `undo_last_write` | write | Restore the state before the last write, if nothing changed since |
 
-Three prompts, for clients that show MCP prompts: **Weekly review** checks the
+Four prompts, for clients that show MCP prompts: **Weekly review** checks the
 tracker and goes through follow-ups, stale applications, reply times, the funnel and
 this week's submissions, and ends with a plan; **Update the tracker from my e-mail**
 has the client's own mail tool find replies from companies, matches them with
-`match_emails` and proposes the changes; **Draft a follow-up** writes a short message
+`match_emails` and proposes the changes; **Put my follow-ups in my calendar** keeps
+the client's calendar in step (below); **Draft a follow-up** writes a short message
 for one row. Two resources: `tracker://layout` and `tracker://application/{row}`.
 
 `add_application` and `mark_applied` warn when the same company already has an
@@ -278,8 +280,15 @@ through the server.
 the tracker: one all-day event each, overdue ones on today, with the contact and the
 last log line. Open the file to import it into Calendar, Outlook or Google Calendar.
 It is a snapshot: after the dates change, export and import again (each event keeps
-its ID; importing into a calendar of its own makes an old copy easy to clear). If your
-client has a calendar tool, it can put the follow-ups there directly.
+its ID; importing into a calendar of its own makes an old copy easy to clear).
+
+To keep a calendar in step instead, use the **Put my follow-ups in my calendar**
+prompt with a client that has a calendar tool (Claude with the Google Calendar
+connector, say). `calendar_events` gives each follow-up an id line at the end of its
+description; the client finds the events already there by it, then adds the new ones,
+moves the changed ones and deletes those whose application closed, after asking you.
+It never touches events without an id line. The server itself does not sign in to
+your calendar.
 
 Read tools are marked read-only. Writes are marked destructive where they
 overwrite cells, and all of them take `dry_run`, `expected_version` and `confirm`.
