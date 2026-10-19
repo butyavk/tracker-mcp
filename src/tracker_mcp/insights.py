@@ -134,7 +134,8 @@ def followup_events(t: Tracker, days: int = 60) -> tuple[list[dict[str, Any]], s
 
 
 def _ics_text(s: str) -> str:
-    s = s.replace("\r\n", "\n").replace("\r", "\n")
+    # Excel keeps a carriage return as the escape _x000D_, which openpyxl reads as text
+    s = s.replace("_x000D_\n", "\n").replace("_x000D_", "\n").replace("\r\n", "\n").replace("\r", "\n")
     return s.replace("\\", "\\\\").replace(";", "\\;").replace(",", "\\,").replace("\n", "\\n")
 
 

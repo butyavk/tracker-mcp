@@ -232,12 +232,14 @@ def test_a_persons_name_does_not_match_a_company_by_its_start(tmp_path):
 def test_calendar_ids_and_carriage_returns(tmp_path):
     t = build(tmp_path, [
         {"company": "Acme", "role": "EM", "applied_on": datetime(2026, 9, 1), "status": "Applied",
-         "followup_on": datetime(2026, 10, 21), "followup_log": "line one\r\nline two\rthree"},
+         "followup_on": datetime(2026, 10, 21)},
         {"company": "Acme", "role": "EM", "applied_on": datetime(2026, 9, 2), "status": "Applied",
          "followup_on": datetime(2026, 10, 22)},
     ])
     events, _ = followup_events(t)
     assert len({e["uid"] for e in events}) == 2           # the same company and role, two ids
-    ics = to_ics(events)
+    # the cell text as openpyxl or Excel may hand it over, whatever the platform
+    ics = to_ics([{"uid": "u@x", "date": "2026-10-21", "title": "T",
+                   "description": "one\r\ntwo\rthree_x000D_\nfour_x000D_five"}])
     assert "\r" not in ics.replace("\r\n", "")
-    assert "line one\\nline two\\nthree" in ics.replace("\r\n ", "")
+    assert "DESCRIPTION:one\\ntwo\\nthree\\nfour\\nfive" in ics.replace("\r\n ", "")
