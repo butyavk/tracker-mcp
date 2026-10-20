@@ -4,7 +4,6 @@ sign-in (which client, which account, which tracker sheet), and plain notices.""
 from __future__ import annotations
 
 import html
-import json
 from urllib.parse import urlparse
 
 STYLE = """
@@ -36,14 +35,15 @@ def page(title: str, body: str, script: str = "") -> str:
 
 
 def notice(title: str, text: str, back: str | None = None) -> str:
-    link = f"<div class=row><a class=button href='{html.escape(back)}'>Back to the app</a></div>" if back else ""
+    safe = back and urlparse(back).scheme in ("https", "http")   # never a javascript: link
+    link = f"<div class=row><a class=button href='{html.escape(back)}'>Back to the app</a></div>" if safe else ""
     return page(title, f"<h1>{html.escape(title)}</h1><p>{html.escape(text)}</p>{link}")
 
 
 def consent(*, pending: str, client_name: str | None, redirect_uri: str, email: str,
-            sheet_title: str | None, picker: dict[str, str] | None) -> str:
+            sheet_title: str | None, picker: bool) -> str:
     """Which client gets access, as whom, to which sheet. The client name is the client's
-    own claim, so the address it returns to is shown too."""
+    own claim, so the address it returns to is shown just as plainly."""
     who = html.escape(client_name or "An MCP client")
     host = html.escape(urlparse(redirect_uri).netloc or redirect_uri)
     p = html.escape(pending)
@@ -57,8 +57,9 @@ def consent(*, pending: str, client_name: str | None, redirect_uri: str, email: 
     body = f"""
 <h1>Connect your job tracker</h1>
 <p><b>{who}</b> wants to read and update your job tracker as <b>{html.escape(email)}</b>.</p>
-<p class=muted>It will return to <code>{host}</code>. Every change it makes still shows you a preview and
-needs your yes. Continue only if you started this from your own app.</p>
+<p>It will send you back to <b>{host}</b>. Continue only if you started this yourself, from an app
+at that address.</p>
+<p class=muted>Every change it makes still shows you a preview and needs your yes.</p>
 {tracker}
 <form method=post action=consent id=f>
 <input type=hidden name=p value="{p}"><input type=hidden name=sheet_id id=sheet_id>
@@ -67,19 +68,24 @@ needs your yes. Continue only if you started this from your own app.</p>
 <button name=action value=cancel>Cancel</button></div></form>"""
     script = ""
     if picker:
-        cfg = json.dumps(picker)
-        script = f"""<script src="https://apis.google.com/js/api.js"></script><script>
-const cfg = {cfg};
-document.getElementById('pick').onclick = () => gapi.load('picker', () => {{
-  const view = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS).setMode(google.picker.DocsViewMode.LIST);
-  new google.picker.PickerBuilder().addView(view).setOAuthToken(cfg.token).setDeveloperKey(cfg.key)
-    .setAppId(cfg.app).setCallback(d => {{
-      if (d.action === google.picker.Action.PICKED) {{
-        document.getElementById('sheet_id').value = d.docs[0].id;
-        const b = document.createElement('input'); b.type = 'hidden'; b.name = 'action'; b.value = 'pick';
-        const f = document.getElementById('f'); f.appendChild(b); f.submit();
-      }}
-    }}).build().setVisible(true);
-}});
+        script = """<script src="https://apis.google.com/js/api.js"></script><script>
+document.getElementById('pick').onclick = async () => {
+  const p = document.querySelector('input[name=p]').value;
+  const r = await fetch('consent/picker', {method: 'POST', body: new URLSearchParams({p})});
+  const cfg = await r.json();
+  if (!r.ok) { alert('This sign-in has expired: start again from your app.'); return; }
+  gapi.load('picker', () => {
+    const view = new google.picker.DocsView(google.picker.ViewId.SPREADSHEETS)
+      .setMode(google.picker.DocsViewMode.LIST);
+    new google.picker.PickerBuilder().addView(view).setOAuthToken(cfg.token).setDeveloperKey(cfg.key)
+      .setAppId(cfg.app).setCallback(d => {
+        if (d.action === google.picker.Action.PICKED) {
+          document.getElementById('sheet_id').value = d.docs[0].id;
+          const b = document.createElement('input'); b.type = 'hidden'; b.name = 'action'; b.value = 'pick';
+          const f = document.getElementById('f'); f.appendChild(b); f.submit();
+        }
+      }).build().setVisible(true);
+  });
+};
 </script>"""
     return page("Connect your job tracker", body, script)

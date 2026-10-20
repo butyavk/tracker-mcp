@@ -120,7 +120,8 @@ def live(tmp_path, monkeypatch):
         assert r.status_code == 201, r.text
         return r.json()
 
-    def sign_in(who, client, action="pick", sheet="sheetALICE01", redirect="http://127.0.0.1:9/cb"):
+    def sign_in(who, client, action="pick", sheet="sheetALICE01", redirect="http://127.0.0.1:9/cb",
+                before_submit=None):
         verifier = secrets.token_urlsafe(48)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         r = http.get("/authorize", params={
@@ -128,6 +129,9 @@ def live(tmp_path, monkeypatch):
             "code_challenge": challenge, "code_challenge_method": "S256", "state": "st8",
             "scope": "tracker", "resource": f"{base}/mcp"})
         assert r.status_code == 302, r.text
+        assert r.headers["location"].startswith(f"{base}/start?s=")
+        r = http.get(r.headers["location"])                     # sets the sign-in cookie in this browser
+        assert r.status_code == 302 and "tmcp" in r.headers.get("set-cookie", "")
         to_google = urllib.parse.urlparse(r.headers["location"])
         assert to_google.netloc == "accounts.google.com"
         q = dict(urllib.parse.parse_qsl(to_google.query))
@@ -139,6 +143,8 @@ def live(tmp_path, monkeypatch):
             return r, None
         page = http.get(r.headers["location"])
         p = re.search(r'name=p value="([^"]+)"', page.text).group(1)
+        if before_submit:
+            before_submit(p)
         r = http.post("/consent", data={"p": p, "action": action, "sheet_id": sheet})
         return page, (r, verifier)
 
@@ -177,14 +183,14 @@ def test_discovery_and_no_token(live):
     r = live.http.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
                        headers={"Accept": "application/json, text/event-stream"})
     assert r.status_code == 401 and "resource_metadata" in r.headers["www-authenticate"]
-    assert live.http.get("/healthz").text == "ok"
+    assert live.http.get("/health").text == "ok"
 
 
 def test_sign_in_pick_a_sheet_and_use_the_tools(live):
     client = live.register()
     page, (r, verifier) = live.sign_in(ALICE, client)
     assert "Test client" in page.text and "127.0.0.1:9" in page.text and "alice@example.com" in page.text
-    assert "picker-key" in page.text and "g-" in page.text      # the Drive picker gets the user's own token
+    assert "consent/picker" in page.text and "g-" not in page.text   # no Google token in the page itself
     tok = live.tokens(client, r, verifier)
     assert tok["token_type"].lower() == "bearer" and tok["refresh_token"]
 
@@ -216,10 +222,6 @@ def test_refresh_rotates_and_revokes_the_old_pair(live):
     new = live.http.post("/token", data={"grant_type": "refresh_token", "refresh_token": tok["refresh_token"],
                                          "client_id": client["client_id"]})
     assert new.status_code == 200, new.text
-    again = live.http.post("/token", data={"grant_type": "refresh_token", "refresh_token": tok["refresh_token"],
-                                           "client_id": client["client_id"]})
-    assert again.status_code == 400 and again.json()["error"] == "invalid_grant"
-
     old = live.http.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
                          headers={"Accept": "application/json, text/event-stream",
                                   "Authorization": f"Bearer {tok['access_token']}"})
@@ -309,3 +311,92 @@ def test_storage_and_identity_checks(tmp_path):
         google.identity(wc, {"id_token": id_token(ALICE, aud="someone-else")})
     with pytest.raises(Exception, match="e-mail"):
         google.identity(wc, {"id_token": id_token({"sub": "1", "email": "a@b.c", "email_verified": False})})
+
+
+def test_the_picker_token_goes_only_to_the_browser_that_signed_in(live):
+    client = live.register()
+    seen = {}
+
+    def check(p):
+        mine = live.http.post("/consent/picker", data={"p": p})
+        assert mine.status_code == 200 and mine.json()["key"] == "picker-key" and mine.json()["token"]
+        other = httpx2.Client(base_url=live.base).post("/consent/picker", data={"p": p})
+        assert other.status_code == 400                    # same p, no cookie
+        seen["ok"] = True
+
+    live.sign_in(ALICE, client, before_submit=check)
+    assert seen["ok"]
+
+
+def test_whoever_starts_a_sign_in_cannot_finish_it_for_someone_else(live, monkeypatch):
+    """The flow of the review: an attacker starts a sign-in with their own client, sends
+    the Google link to Alice, and tries to complete consent with the state they saw."""
+    live.remote.provider.redirect_hosts = frozenset({"*"})   # even with open registration
+    good = live.register()
+    _, (r, v) = live.sign_in(ALICE, good)
+    live.tokens(good, r, v)
+    evil = live.register(redirect="https://evil.example/cb", name="Claude")
+    atk = httpx2.Client(base_url=live.base, follow_redirects=False)
+    r = atk.get("/authorize", params={"response_type": "code", "client_id": evil["client_id"],
+                                      "redirect_uri": "https://evil.example/cb", "code_challenge": "x" * 43,
+                                      "code_challenge_method": "S256", "state": "x"})
+    r = atk.get(r.headers["location"])                       # the attacker's own browser gets the cookie
+    state = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(r.headers["location"]).query))["state"]
+    victim = httpx2.Client(base_url=live.base, follow_redirects=False)
+    import tracker_mcp.remote.google as g
+    monkeypatch.setattr(g, "exchange_code", lambda c, code, ver: pytest.fail("Google code must not be used"))
+    cb = victim.get("/google/callback", params={"code": "victimcode", "state": state})
+    assert cb.status_code == 400 and "another browser" in cb.text
+    assert atk.get("/consent", params={"p": state}).status_code == 400
+    assert atk.post("/consent", data={"p": state, "action": "continue"}).status_code == 400
+
+
+def test_registration_only_for_known_return_addresses(live):
+    for uri in ("javascript:alert(1)//", "https://evil.example/cb", "http://evil.example/cb", "data:text/html,x"):
+        r = live.http.post("/register", json={"redirect_uris": [uri], "client_name": "x",
+                                              "token_endpoint_auth_method": "none"})
+        assert r.status_code == 400 and r.json()["error"] == "invalid_redirect_uri", uri
+    for uri in ("https://claude.ai/api/mcp/auth_callback", "http://localhost:6274/oauth/callback"):
+        r = live.http.post("/register", json={"redirect_uris": [uri], "client_name": "ok",
+                                              "token_endpoint_auth_method": "none"})
+        assert r.status_code == 201, uri
+
+
+def test_a_replayed_refresh_token_or_code_ends_the_whole_sign_in(live):
+    client = live.register()
+    _, (r, verifier) = live.sign_in(ALICE, client)
+    q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(r.headers["location"]).query))
+    first = live.tokens(client, r, verifier)
+    new = live.http.post("/token", data={"grant_type": "refresh_token", "refresh_token": first["refresh_token"],
+                                         "client_id": client["client_id"]}).json()
+    stolen = live.http.post("/token", data={"grant_type": "refresh_token", "refresh_token": first["refresh_token"],
+                                            "client_id": client["client_id"]})
+    assert stolen.status_code == 400
+    # the copy was used: the legitimate newer tokens die too
+    again = live.http.post("/token", data={"grant_type": "refresh_token", "refresh_token": new["refresh_token"],
+                                           "client_id": client["client_id"]})
+    assert again.status_code == 400
+    r2 = live.http.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                        headers={"Accept": "application/json, text/event-stream",
+                                 "Authorization": f"Bearer {new['access_token']}"})
+    assert r2.status_code == 401
+    # an authorization code used twice: the tokens it gave are revoked
+    _, (r, verifier) = live.sign_in(ALICE, client)
+    q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(r.headers["location"]).query))
+    good = live.tokens(client, r, verifier)
+    replay = live.http.post("/token", data={"grant_type": "authorization_code", "code": q["code"],
+                                            "redirect_uri": "http://127.0.0.1:9/cb",
+                                            "client_id": client["client_id"], "code_verifier": verifier})
+    assert replay.status_code == 400
+    r3 = live.http.post("/mcp", json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+                        headers={"Accept": "application/json, text/event-stream",
+                                 "Authorization": f"Bearer {good['access_token']}"})
+    assert r3.status_code == 401
+
+
+def test_id_token_audience_and_verified_email_exactly():
+    wc = google.WebClient("web-client", "s", "https://x/google/callback")
+    with pytest.raises(Exception, match="not for this server"):
+        google.identity(wc, {"id_token": id_token(ALICE, aud="xweb-client-other")})
+    with pytest.raises(Exception, match="e-mail"):
+        google.identity(wc, {"id_token": id_token({"sub": "9", "email": "a@b.c", "email_verified": "false"})})

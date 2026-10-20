@@ -2,8 +2,8 @@
 (on Cloud Run, a Cloud Storage bucket mounted as a folder).
 
     clients/<client id>.json        MCP clients that registered (RFC 7591)
-    pending/<id>.json               a sign-in in progress (10 minutes)
     codes/<sha256>.json             authorization codes (5 minutes, used once)
+    families/<id>.json              one sign-in's tokens (90 days at most; revoked as one)
     access/<sha256>.json            access tokens (1 hour)
     refresh/<sha256>.json           refresh tokens (30 days, rotated on use)
     users/<sub>/user.json           e-mail, Google refresh token (encrypted), the chosen sheet
@@ -26,7 +26,7 @@ from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken
 
-KINDS = ("clients", "pending", "codes", "access", "refresh")
+KINDS = ("clients", "codes", "access", "refresh", "families")
 
 
 def new_token() -> str:
@@ -90,15 +90,23 @@ class Storage:
         self._path(kind, name).unlink(missing_ok=True)
 
     def sweep(self) -> int:
-        """Remove expired records; returns how many."""
+        """Remove expired records and stray temporary files; returns how many."""
         gone = 0
         now = time.time()
         for kind in KINDS:
-            for path in (self.root / kind).glob("*.json"):
+            folder = self.root / kind
+            for path in folder.glob("*.json"):
                 data = self._read(path)
                 if data and data.get("expires_at") and data["expires_at"] < now:
                     path.unlink(missing_ok=True)
                     gone += 1
+            for path in folder.glob(".*.tmp"):   # left by an interrupted write
+                try:
+                    if path.stat().st_mtime < now - 3600:
+                        path.unlink(missing_ok=True)
+                        gone += 1
+                except OSError:
+                    pass
         return gone
 
     # ---- users

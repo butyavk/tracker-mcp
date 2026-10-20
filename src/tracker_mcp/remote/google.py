@@ -41,8 +41,7 @@ def pkce() -> tuple[str, str]:
 def authorize_url(client: WebClient, state: str, code_challenge: str, login_hint: str | None = None) -> str:
     params = {"client_id": client.client_id, "redirect_uri": client.redirect_uri, "response_type": "code",
               "scope": SCOPES, "access_type": "offline", "prompt": "consent", "state": state,
-              "code_challenge": code_challenge, "code_challenge_method": "S256",
-              "include_granted_scopes": "true"}
+              "code_challenge": code_challenge, "code_challenge_method": "S256"}
     if login_hint:
         params["login_hint"] = login_hint
     return f"{AUTH_URI}?{urllib.parse.urlencode(params)}"
@@ -64,12 +63,13 @@ def identity(client: WebClient, tokens: dict[str, Any]) -> dict[str, Any]:
         claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
     except (IndexError, ValueError) as e:
         raise TrackerError("Google sent no readable ID token.") from e
-    aud = claims.get("aud")
-    if (aud != client.client_id and client.client_id not in (aud or [])) or claims.get("iss") not in ISSUERS:
+    aud, cid = claims.get("aud"), client.client_id
+    if not (aud == cid or (isinstance(aud, list) and cid in aud and claims.get("azp") == cid)) \
+            or claims.get("iss") not in ISSUERS:
         raise TrackerError("The ID token is not for this server.")
     if int(claims.get("exp", 0)) < time.time():
         raise TrackerError("The ID token has expired.")
-    if not claims.get("email") or not claims.get("email_verified"):
+    if not claims.get("email") or claims.get("email_verified") is not True:
         raise TrackerError("Google did not confirm an e-mail address for this account.")
     return {"sub": str(claims["sub"]), "email": str(claims["email"]).lower()}
 

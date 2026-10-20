@@ -1,22 +1,35 @@
 """The remote server as its own OAuth authorization server for MCP clients, with Google
 behind it for who the user is (the "third-party authorization" flow of the MCP spec).
 
-    client ──/authorize──▶ server ──▶ Google sign-in ──▶ /google/callback
-                                         │ allow-list, keep the Google refresh token
+    client ──/authorize──▶ /start (sets a cookie in this browser) ──▶ Google sign-in
+                                                                          │
+         /google/callback (same browser? allow-list; keep the Google token)
                                          ▼
-                           /consent: which client, which tracker sheet ── Continue
+           /consent: which client, as whom, which sheet ── Continue
                                          │
     client ◀── redirect_uri?code=… ──────┘      client ──/token (PKCE)──▶ server tokens
 
-The tokens a client gets are the server's own, never Google's: an access token for an
-hour and a refresh token for 30 days, rotated on every use and stored only as hashes.
+The sign-in is bound to the browser that started it: a cookie set on /start must come
+back with Google's redirect and with the consent page, so someone who starts a sign-in
+and sends the Google link to another person cannot finish it for them.
+
+The tokens a client gets are the server's own, never Google's. Each sign-in starts a
+token family: an access token for an hour and a refresh token rotated on every use, for
+at most 90 days. Reusing a spent refresh token or authorization code revokes the whole
+family (it means one was copied). Tokens are stored only as hashes.
 """
 
 from __future__ import annotations
 
+import ipaddress
+import json
+import secrets
 import time
+from collections import OrderedDict
 from typing import Any
+from urllib.parse import urlparse
 
+import anyio.to_thread
 from mcp.server.auth.provider import (
     AccessToken,
     AuthorizationCode,
@@ -24,65 +37,145 @@ from mcp.server.auth.provider import (
     AuthorizeError,
     OAuthAuthorizationServerProvider,
     RefreshToken,
+    RegistrationError,
     TokenError,
     construct_redirect_uri,
 )
 from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
 
-from . import google
 from .storage import Storage, new_token, token_hash
 
 SCOPE = "tracker"
 ACCESS_TTL = 3600
 REFRESH_TTL = 30 * 24 * 3600
+FAMILY_TTL = 90 * 24 * 3600        # then the person signs in with Google again
 CODE_TTL = 300
 PENDING_TTL = 600
+MAX_PENDING = 500
+MAX_CLIENTS = 500
+DEFAULT_REDIRECT_HOSTS = frozenset({"claude.ai", "claude.com"})
+
+
+def _is_loopback(host: str) -> bool:
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def redirect_allowed(uri: str, hosts: frozenset[str]) -> bool:
+    """https to a host on the list (or any, with "*"), or http on this machine (a CLI or
+    the MCP Inspector). Never javascript:, data: or other schemes."""
+    u = urlparse(uri)
+    host = (u.hostname or "").lower()
+    if u.scheme == "http":
+        return _is_loopback(host)
+    if u.scheme != "https" or not host:
+        return False
+    return "*" in hosts or host in hosts or any(host.endswith("." + h) for h in hosts)
 
 
 class Provider(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken, AccessToken]):
-    def __init__(self, storage: Storage, client: google.WebClient, base_url: str, resource: str,
-                 allowed: frozenset[str] = frozenset()):
+    def __init__(self, storage: Storage, base_url: str, resource: str,
+                 allowed: frozenset[str] = frozenset(), redirect_hosts: frozenset[str] = DEFAULT_REDIRECT_HOSTS):
         self.storage = storage
-        self.google = client
         self.base_url = base_url.rstrip("/")
         self.resource = resource
         self.allowed = allowed          # e-mails; someone taken off the list loses access at once
+        self.redirect_hosts = redirect_hosts
+        # sign-ins in progress live in memory (one instance): an unauthenticated /authorize
+        # never writes to storage
+        self.pending: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._swept = 0.0
+
+    # ---- helpers run in a worker thread: storage is a mounted bucket
+
+    @staticmethod
+    async def _io(fn, *args):
+        return await anyio.to_thread.run_sync(fn, *args)
 
     def allows(self, subject: str | None) -> bool:
         user = self.storage.user(subject) if subject else None
         return bool(user and user.get("active", True) and user.get("email", "").lower() in self.allowed)
 
+    def _family_ok(self, family: str | None) -> bool:
+        data = self.storage.get("families", family) if family else None
+        return bool(data and not data.get("revoked"))
+
+    def revoke_family(self, family: str | None) -> None:
+        if not family:
+            return
+        data = self.storage.get("families", family)
+        if data:
+            data["revoked"] = True
+            self.storage.put("families", family, data)
+
+    # ---- sign-ins in progress
+
+    def new_pending(self, data: dict[str, Any]) -> str:
+        now = time.time()
+        for k in [k for k, v in self.pending.items() if v["expires_at"] < now]:
+            del self.pending[k]
+        while len(self.pending) >= MAX_PENDING:
+            self.pending.popitem(last=False)
+        key = new_token()
+        self.pending[key] = {**data, "expires_at": now + PENDING_TTL}
+        return key
+
+    def get_pending(self, key: str) -> dict[str, Any] | None:
+        data = self.pending.get(key)
+        if data and data["expires_at"] < time.time():
+            self.pending.pop(key, None)
+            return None
+        return data
+
+    def pop_pending(self, key: str) -> dict[str, Any] | None:
+        data = self.get_pending(key)
+        self.pending.pop(key, None)
+        return data
+
     # ---- clients (dynamic registration)
 
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
-        try:
-            data = self.storage.get("clients", client_id)
-        except ValueError:
-            return None
+        def read():
+            try:
+                return self.storage.get("clients", client_id)
+            except ValueError:
+                return None
+        data = await self._io(read)
         return OAuthClientInformationFull.model_validate(data) if data else None
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
-        self.storage.put("clients", client_info.client_id, client_info.model_dump(mode="json", exclude_none=True))
+        for uri in client_info.redirect_uris or []:
+            if not redirect_allowed(str(uri), self.redirect_hosts):
+                raise RegistrationError("invalid_redirect_uri", f"{uri} is not an address this server returns to")
+        data = client_info.model_dump(mode="json", exclude_none=True)
+        if len(json.dumps(data)) > 8192 or len(client_info.client_name or "") > 100:
+            raise RegistrationError("invalid_client_metadata", "client metadata too large")
 
-    # ---- authorization: hand over to Google, come back to /google/callback
+        def write():
+            if sum(1 for _ in (self.storage.root / "clients").glob("*.json")) >= MAX_CLIENTS:
+                raise RegistrationError("invalid_client_metadata", "this server takes no more registrations")
+            self.storage.put("clients", client_info.client_id, data)
+        await self._io(write)
+
+    # ---- authorization: our /start, then Google, then /google/callback and /consent
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
         if params.resource and params.resource.rstrip("/") != self.resource.rstrip("/"):
             raise AuthorizeError("invalid_target", f"this server issues tokens only for {self.resource}")
-        if time.time() - self._swept > 3600:   # expired codes, tokens and sign-ins, once an hour
+        if time.time() - self._swept > 3600:   # expired codes, tokens and families, once an hour
             self._swept = time.time()
-            self.storage.sweep()
-        pending = new_token()
-        verifier, challenge = google.pkce()
-        self.storage.put("pending", pending, {
+            await self._io(self.storage.sweep)
+        key = self.new_pending({
             "client_id": client.client_id, "client_name": client.client_name,
             "redirect_uri": str(params.redirect_uri),
             "redirect_uri_provided_explicitly": params.redirect_uri_provided_explicitly,
             "state": params.state, "scopes": params.scopes or [SCOPE],
-            "code_challenge": params.code_challenge, "resource": params.resource,
-            "google_verifier": verifier, "expires_at": time.time() + PENDING_TTL})
-        return google.authorize_url(self.google, pending, challenge)
+            "code_challenge": params.code_challenge, "resource": params.resource})
+        return f"{self.base_url}/start?s={key}"
 
     def finish(self, pending: dict[str, Any], sub: str) -> str:
         """The user said Continue on the consent page: a code for the client."""
@@ -101,8 +194,16 @@ class Provider(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken,
 
     async def load_authorization_code(self, client: OAuthClientInformationFull,
                                       authorization_code: str) -> AuthorizationCode | None:
-        data = self.storage.get("codes", token_hash(authorization_code))
-        if not data or data["client_id"] != client.client_id:
+        def read():
+            data = self.storage.get("codes", token_hash(authorization_code))
+            if not data or data["client_id"] != client.client_id:
+                return None
+            if data.get("used_family"):   # a second use: the code was copied; revoke what it gave
+                self.revoke_family(data["used_family"])
+                return None
+            return data
+        data = await self._io(read)
+        if not data:
             return None
         return AuthorizationCode(code=authorization_code, scopes=data["scopes"], expires_at=data["expires_at"],
                                  client_id=data["client_id"], code_challenge=data["code_challenge"],
@@ -112,30 +213,53 @@ class Provider(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken,
 
     async def exchange_authorization_code(self, client: OAuthClientInformationFull,
                                           authorization_code: AuthorizationCode) -> OAuthToken:
-        if not self.storage.take("codes", token_hash(authorization_code.code)):
-            raise TokenError("invalid_grant", "authorization code already used or expired")
-        return self._issue(client.client_id, authorization_code.scopes, authorization_code.subject,
-                           authorization_code.resource)
+        def run():
+            h = token_hash(authorization_code.code)
+            data = self.storage.get("codes", h)
+            if not data or data.get("used_family"):
+                raise TokenError("invalid_grant", "authorization code already used or expired")
+            family = new_token()
+            now = int(time.time())
+            self.storage.put("families", family, {"subject": authorization_code.subject,
+                                                  "client_id": client.client_id, "created": now,
+                                                  "expires_at": now + FAMILY_TTL})
+            self.storage.put("codes", h, {**data, "used_family": family})   # kept until it expires
+            return self._issue(client.client_id, authorization_code.scopes, authorization_code.subject,
+                               authorization_code.resource, family)
+        return await self._io(run)
 
     # ---- tokens
 
-    def _issue(self, client_id: str, scopes: list[str], subject: str | None, resource: str | None) -> OAuthToken:
+    def _issue(self, client_id: str, scopes: list[str], subject: str | None, resource: str | None,
+               family: str) -> OAuthToken:
         if not self.allows(subject):
             raise TokenError("invalid_grant", "the user is not allowed on this server")
+        fam = self.storage.get("families", family)
+        if not fam or fam.get("revoked"):
+            raise TokenError("invalid_grant", "this sign-in has ended; sign in again")
         access, refresh = new_token(), new_token()
         now = int(time.time())
+        fam_end = int(fam["expires_at"])
         # a client that names no resource (RFC 8707) still gets a token bound to this server
-        record = {"client_id": client_id, "scopes": scopes, "subject": subject, "resource": resource or self.resource}
-        self.storage.put("access", token_hash(access), {**record, "expires_at": now + ACCESS_TTL,
-                                                        "refresh": token_hash(refresh)})
-        self.storage.put("refresh", token_hash(refresh), {**record, "expires_at": now + REFRESH_TTL,
+        record = {"client_id": client_id, "scopes": scopes, "subject": subject,
+                  "resource": resource or self.resource, "family": family}
+        self.storage.put("access", token_hash(access), {**record, "expires_at": min(now + ACCESS_TTL, fam_end)})
+        self.storage.put("refresh", token_hash(refresh), {**record, "expires_at": min(now + REFRESH_TTL, fam_end),
                                                           "access": token_hash(access)})
-        return OAuthToken(access_token=access, token_type="Bearer", expires_in=ACCESS_TTL,
+        return OAuthToken(access_token=access, token_type="Bearer", expires_in=max(1, min(ACCESS_TTL, fam_end - now)),
                           refresh_token=refresh, scope=" ".join(scopes))
 
     async def load_refresh_token(self, client: OAuthClientInformationFull, refresh_token: str) -> RefreshToken | None:
-        data = self.storage.get("refresh", token_hash(refresh_token))
-        if not data or data["client_id"] != client.client_id:
+        def read():
+            data = self.storage.get("refresh", token_hash(refresh_token))
+            if not data or data["client_id"] != client.client_id:
+                return None
+            if data.get("spent"):   # a rotated token used again: it was copied
+                self.revoke_family(data.get("family"))
+                return None
+            return data if self._family_ok(data.get("family")) else None
+        data = await self._io(read)
+        if not data:
             return None
         return RefreshToken(token=refresh_token, client_id=data["client_id"], scopes=data["scopes"],
                             expires_at=int(data["expires_at"]), resource=data.get("resource"),
@@ -143,29 +267,43 @@ class Provider(OAuthAuthorizationServerProvider[AuthorizationCode, RefreshToken,
 
     async def exchange_refresh_token(self, client: OAuthClientInformationFull, refresh_token: RefreshToken,
                                      scopes: list[str]) -> OAuthToken:
-        old = self.storage.take("refresh", token_hash(refresh_token.token))   # rotation: the old one is spent
-        if not old:
-            raise TokenError("invalid_grant", "refresh token already used or expired")
-        if old.get("access"):
-            self.storage.delete("access", old["access"])
-        return self._issue(client.client_id, scopes or refresh_token.scopes, refresh_token.subject,
-                           refresh_token.resource)
+        def run():
+            h = token_hash(refresh_token.token)
+            old = self.storage.get("refresh", h)
+            if not old or old.get("spent"):
+                self.revoke_family(old.get("family") if old else None)
+                raise TokenError("invalid_grant", "refresh token already used or expired")
+            self.storage.put("refresh", h, {**old, "spent": True})   # kept to recognise a replay
+            if old.get("access"):
+                self.storage.delete("access", old["access"])
+            return self._issue(client.client_id, scopes or refresh_token.scopes, refresh_token.subject,
+                               refresh_token.resource, old["family"])
+        return await self._io(run)
 
     async def load_access_token(self, token: str) -> AccessToken | None:
-        data = self.storage.get("access", token_hash(token))
-        if not data or not self.allows(data.get("subject")):
+        def read():
+            data = self.storage.get("access", token_hash(token))
+            if not data or not self._family_ok(data.get("family")) or not self.allows(data.get("subject")):
+                return None
+            return data
+        data = await self._io(read)
+        if not data:
             return None
         return AccessToken(token=token, client_id=data["client_id"], scopes=data["scopes"],
                            expires_at=int(data["expires_at"]), resource=data.get("resource"),
                            subject=data["subject"])
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
-        kind = "refresh" if isinstance(token, RefreshToken) else "access"
-        data = self.storage.take(kind, token_hash(token.token))
-        if data:
-            other = data.get("access" if kind == "refresh" else "refresh")
-            if other:
-                self.storage.delete("access" if kind == "refresh" else "refresh", other)
+        def run():
+            kind = "refresh" if isinstance(token, RefreshToken) else "access"
+            data = self.storage.get(kind, token_hash(token.token))
+            if data:
+                self.revoke_family(data.get("family"))
+        await self._io(run)
 
 
-__all__ = ["Provider", "SCOPE", "AuthorizeError"]
+def new_cookie() -> str:
+    return secrets.token_urlsafe(32)
+
+
+__all__ = ["Provider", "SCOPE", "redirect_allowed", "new_cookie"]

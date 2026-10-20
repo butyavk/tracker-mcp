@@ -41,11 +41,19 @@ It listens on the network, so it is a different model:
   someone off it ends their access at once.
 - **What an MCP client gets:** the server's own tokens after OAuth 2.1 with PKCE and
   dynamic client registration: an access token for an hour and a refresh token for 30
-  days, rotated on every use, bound to the server's address (RFC 8707). Tokens are
-  stored only as SHA-256 hashes; authorization codes work once, for five minutes.
+  days, rotated on every use, bound to the server's address (RFC 8707), and all of a
+  sign-in's tokens end after 90 days. Reusing a spent refresh token or authorization
+  code revokes everything that sign-in issued. Tokens are stored only as SHA-256
+  hashes; authorization codes work once, for five minutes.
+- **Which clients:** registration accepts only return addresses on the server's list
+  (`claude.ai` and `claude.com` by default, `TRACKER_MCP_REDIRECT_HOSTS`) and loopback
+  addresses for local tools.
+- **Whose browser:** a sign-in is bound to the browser that started it by a cookie set
+  before Google's page; Google's return and the consent page need that cookie, so a
+  sign-in link sent to someone else cannot be completed by the sender.
 - **Consent:** after Google, a page names the connecting client and the address it
-  returns to, the account and the sheet, so a client registered by someone else
-  cannot quietly get a token for you; the page refuses to be framed.
+  returns to, the account and the sheet; the page refuses to be framed, and the Google
+  token for the file picker is handed over only when you click Choose.
 - **Google access:** `openid email drive.file`, so only the sheets each person picks
   or the server creates for them. Their Google refresh token is kept encrypted (a
   key outside the data folder, in Secret Manager on Cloud Run) and never sent to MCP

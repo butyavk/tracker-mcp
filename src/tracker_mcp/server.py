@@ -24,6 +24,7 @@ import inspect
 import json
 import os
 import sys
+import time
 from collections import OrderedDict
 from datetime import date
 from pathlib import Path
@@ -201,7 +202,11 @@ class WriteConfirmation(BaseModel):
 
 
 SKIP, BY_TOKEN = "skip", "token"   # resolver outcomes when no dialog is shown
-_plans: OrderedDict[tuple[int, str], dict[str, Any]] = OrderedDict()   # request -> plan, resolver -> body
+# request -> (when, plan): the resolver makes the plan, the tool body takes it. A dialog
+# round that ends without the body (the 2026-07-28 protocol) leaves its plan behind, so
+# plans go stale after ten minutes rather than crowding out live ones.
+_plans: OrderedDict[tuple[int, str], tuple[float, dict[str, Any]]] = OrderedDict()
+PLAN_TTL = 600
 
 
 def _plan_key(ctx: Context) -> tuple[int, str]:
@@ -269,9 +274,10 @@ def ask(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], *,
         expected_version: str | None, dry_run: bool) -> Elicit[WriteConfirmation] | str:
     """Resolver body: make the plan and decide how the user approves it."""
     plan = call(method, *args, dry_run=True, expected_version=expected_version, **kwargs)
-    _plans[_plan_key(ctx)] = plan
-    while len(_plans) > 50:
+    now = time.monotonic()
+    while _plans and (len(_plans) >= 1000 or next(iter(_plans.values()))[0] < now - PLAN_TTL):
         _plans.popitem(last=False)
+    _plans[_plan_key(ctx)] = (now, plan)
     if dry_run or not _has_work(plan) or not tracker().cfg.safety.confirm_writes:
         return SKIP
     caps = ctx.client_capabilities
@@ -283,7 +289,7 @@ def ask(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], *,
 def finish(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], approval: Any, *,
            dry_run: bool, confirm: str | None) -> dict[str, Any]:
     """Tool body: return the preview, or write the approved plan."""
-    plan = _plans.pop(_plan_key(ctx), None)
+    plan = (_plans.pop(_plan_key(ctx), None) or (0, None))[1]
     if plan is None:  # not expected: the resolver runs first in the same request
         raise ToolError("Internal: no plan for this call; retry.")
     if not _has_work(plan):

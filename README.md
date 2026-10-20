@@ -264,6 +264,8 @@ creates a private Cloud Storage bucket for the server's data, an encryption key 
 Secret Manager, asks for the client's secret without showing it, and deploys one
 instance. At personal use it fits Cloud Run's free tier; the bucket costs cents.
 
+Clients may register only with return addresses on `claude.ai` and `claude.com` (or on
+your own machine, for the MCP Inspector); `TRACKER_MCP_REDIRECT_HOSTS` changes the list.
 Other hosts: the [Dockerfile](Dockerfile) runs `tracker-mcp remote`; the settings are in
 `tracker-mcp remote --help`. Whoever runs a server can reach the sheets of the people
 who sign in to it, so use one run by someone you trust.
