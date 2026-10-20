@@ -51,7 +51,7 @@ program that applies them.
 | Replies in your mailbox | The model reads them and decides which row each is about | `match_emails` names the row and the change, the same way every time |
 | Each request | Write, run and check a script | One tool call |
 | Free-form analysis, charts, reshaping the sheet | Anything | Not its job: Claude still does that alongside |
-| Where | Where Claude can run code on your files, or on a copy you upload | Any MCP client: Claude Desktop (in a normal chat), Claude Code, Cursor, ...; not in a browser or on a phone |
+| Where | Where Claude can run code on your files, or on a copy you upload | Any MCP client: Claude Desktop (in a normal chat), Claude Code, Cursor, ...; in a browser or on a phone through [your own server](#remote-server-claude-on-the-web-and-on-your-phone) |
 
 So tracker-mcp mostly does not give Claude new abilities. It gives the everyday part
 of a job search (record what happened, see what is due, see what works) fixed rules and
@@ -80,7 +80,8 @@ headers and dropdowns and keeps what it learned in a small config file.
 
 You don't need tracker-mcp if you only want a one-time analysis of your applications,
 if you rarely update the tracker, or if you only use Claude in a browser or on your phone
-(a server like this runs on your computer). If Claude already keeps your tracker well with
+and don't want to run [a server of your own](#remote-server-claude-on-the-web-and-on-your-phone):
+Claude's Google Sheets connector may be enough. If Claude already keeps your tracker well with
 instructions you wrote, what you gain is reliability, not new features.
 
 ## Quick start
