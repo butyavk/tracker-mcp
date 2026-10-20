@@ -131,7 +131,7 @@ def live(tmp_path, monkeypatch):
         assert r.status_code == 302, r.text
         assert r.headers["location"].startswith(f"{base}/start?s=")
         r = http.get(r.headers["location"])                     # sets the sign-in cookie in this browser
-        assert r.status_code == 302 and "tmcp" in r.headers.get("set-cookie", "")
+        assert r.status_code == 302 and "tmcp-" in r.headers.get("set-cookie", "")
         to_google = urllib.parse.urlparse(r.headers["location"])
         assert to_google.netloc == "accounts.google.com"
         q = dict(urllib.parse.parse_qsl(to_google.query))
@@ -331,7 +331,7 @@ def test_the_picker_token_goes_only_to_the_browser_that_signed_in(live):
 def test_whoever_starts_a_sign_in_cannot_finish_it_for_someone_else(live, monkeypatch):
     """The flow of the review: an attacker starts a sign-in with their own client, sends
     the Google link to Alice, and tries to complete consent with the state they saw."""
-    live.remote.provider.redirect_hosts = frozenset({"*"})   # even with open registration
+    live.remote.provider.redirects = frozenset({"*"})   # even with open registration
     good = live.register()
     _, (r, v) = live.sign_in(ALICE, good)
     live.tokens(good, r, v)
@@ -352,7 +352,9 @@ def test_whoever_starts_a_sign_in_cannot_finish_it_for_someone_else(live, monkey
 
 
 def test_registration_only_for_known_return_addresses(live):
-    for uri in ("javascript:alert(1)//", "https://evil.example/cb", "http://evil.example/cb", "data:text/html,x"):
+    for uri in ("javascript:alert(1)//", "https://evil.example/cb", "http://evil.example/cb", "data:text/html,x",
+                "https://x.claude.ai/api/mcp/auth_callback", "https://claude.ai:8443/api/mcp/auth_callback",
+                "https://claude.ai/elsewhere", "https://claude.ai@evil.example/api/mcp/auth_callback"):
         r = live.http.post("/register", json={"redirect_uris": [uri], "client_name": "x",
                                               "token_endpoint_auth_method": "none"})
         assert r.status_code == 400 and r.json()["error"] == "invalid_redirect_uri", uri
@@ -362,7 +364,23 @@ def test_registration_only_for_known_return_addresses(live):
         assert r.status_code == 201, uri
 
 
-def test_a_replayed_refresh_token_or_code_ends_the_whole_sign_in(live):
+def test_a_quick_retry_of_a_refresh_does_not_end_the_sign_in(live):
+    client = live.register()
+    _, (r, verifier) = live.sign_in(ALICE, client)
+    first = live.tokens(client, r, verifier)
+    new = live.http.post("/token", data={"grant_type": "refresh_token", "refresh_token": first["refresh_token"],
+                                         "client_id": client["client_id"]}).json()
+    retry = live.http.post("/token", data={"grant_type": "refresh_token", "refresh_token": first["refresh_token"],
+                                           "client_id": client["client_id"]})
+    assert retry.status_code == 400                       # refused, but within seconds: no revocation
+    ok = live.http.post("/token", data={"grant_type": "refresh_token", "refresh_token": new["refresh_token"],
+                                        "client_id": client["client_id"]})
+    assert ok.status_code == 200, ok.text
+
+
+def test_a_replayed_refresh_token_or_code_ends_the_whole_sign_in(live, monkeypatch):
+    from tracker_mcp.remote import provider as prov
+    monkeypatch.setattr(prov, "REPLAY_GRACE", -1)          # as if the copy came back later
     client = live.register()
     _, (r, verifier) = live.sign_in(ALICE, client)
     q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(r.headers["location"]).query))

@@ -42,15 +42,18 @@ It listens on the network, so it is a different model:
 - **What an MCP client gets:** the server's own tokens after OAuth 2.1 with PKCE and
   dynamic client registration: an access token for an hour and a refresh token for 30
   days, rotated on every use, bound to the server's address (RFC 8707), and all of a
-  sign-in's tokens end after 90 days. Reusing a spent refresh token or authorization
-  code revokes everything that sign-in issued. Tokens are stored only as SHA-256
+  sign-in's tokens end after 90 days. Reusing a spent refresh token (later than a few
+  seconds, which a retry would be) or authorization code revokes everything that
+  sign-in issued. Tokens are stored only as SHA-256
   hashes; authorization codes work once, for five minutes.
-- **Which clients:** registration accepts only return addresses on the server's list
-  (`claude.ai` and `claude.com` by default, `TRACKER_MCP_REDIRECT_HOSTS`) and loopback
-  addresses for local tools.
-- **Whose browser:** a sign-in is bound to the browser that started it by a cookie set
-  before Google's page; Google's return and the consent page need that cookie, so a
-  sign-in link sent to someone else cannot be completed by the sender.
+- **Which clients:** registration accepts only the exact return addresses on the
+  server's list (Claude's connector callback on claude.ai and claude.com by default,
+  `TRACKER_MCP_REDIRECT_URIS`) and loopback addresses for local tools; registrations
+  never used expire after a day, and anonymous endpoints are rate-limited per address.
+- **Whose browser:** a sign-in is bound to the browser that started it by its own
+  cookie, set before Google's page; Google's return and the consent page need it, so a
+  sign-in link sent to someone else cannot be completed by the sender. A sign-in that
+  comes back without its cookie is ended, Google's code with it.
 - **Consent:** after Google, a page names the connecting client and the address it
   returns to, the account and the sheet; the page refuses to be framed, and the Google
   token for the file picker is handed over only when you click Choose.

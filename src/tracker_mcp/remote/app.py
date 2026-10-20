@@ -9,8 +9,9 @@ Google and working on their own Google Sheet. Settings come from the environment
                                  redirect URI <base>/google/callback
     GOOGLE_PICKER_API_KEY, GOOGLE_APP_ID   optional: the Drive file picker on the consent
                                  page (the app id is the Cloud project number)
-    TRACKER_MCP_REDIRECT_HOSTS   where MCP clients may be sent back after sign-in
-                                 (default claude.ai,claude.com; loopback always)
+    TRACKER_MCP_REDIRECT_URIS    the exact https addresses MCP clients may be sent back
+                                 to after sign-in (default: Claude's connector callback on
+                                 claude.ai and claude.com; "*" for any; loopback always)
     PORT                         default 8080
 """
 
@@ -40,7 +41,7 @@ from ..gsheets import SheetsStore, use_transport
 from ..stores import TrackerError
 from ..tracker import Tracker
 from . import google, pages
-from .provider import DEFAULT_REDIRECT_HOSTS, SCOPE, Provider, new_cookie
+from .provider import DEFAULT_REDIRECTS, SCOPE, Provider, new_cookie
 from .storage import Storage, token_hash
 
 CONFIG_NAME = "tracker.tracker-mcp.toml"
@@ -60,7 +61,7 @@ class Settings:
     client: google.WebClient
     picker_key: str | None = None
     app_id: str | None = None
-    redirect_hosts: frozenset[str] = DEFAULT_REDIRECT_HOSTS
+    redirects: frozenset[str] = DEFAULT_REDIRECTS
 
     @classmethod
     def from_env(cls, env: dict[str, str] | None = None) -> Settings:
@@ -76,9 +77,8 @@ class Settings:
                    client=google.WebClient(e["GOOGLE_WEB_CLIENT_ID"], e["GOOGLE_WEB_CLIENT_SECRET"],
                                            f"{base}/google/callback"),
                    picker_key=e.get("GOOGLE_PICKER_API_KEY") or None, app_id=e.get("GOOGLE_APP_ID") or None,
-                   redirect_hosts=frozenset(h.strip().lower() for h in e["TRACKER_MCP_REDIRECT_HOSTS"].split(",")
-                                            if h.strip())
-                   if e.get("TRACKER_MCP_REDIRECT_HOSTS") else DEFAULT_REDIRECT_HOSTS)
+                   redirects=frozenset(u.strip() for u in e["TRACKER_MCP_REDIRECT_URIS"].split(",") if u.strip())
+                   if e.get("TRACKER_MCP_REDIRECT_URIS") else DEFAULT_REDIRECTS)
 
 
 @dataclass
@@ -140,13 +140,19 @@ class Remote:
     # for the tools.
 
     @property
-    def cookie_name(self) -> str:
-        return "__Host-tmcp" if self.settings.base_url.startswith("https://") else "tmcp"
+    def secure(self) -> bool:
+        return self.settings.base_url.startswith("https://")
+
+    def cookie_name(self, key: str) -> str:
+        """One cookie per sign-in, so two at once in one browser (two tabs, a link
+        previewer opening /start) do not overwrite each other."""
+        return ("__Host-tmcp-" if self.secure else "tmcp-") + token_hash(key)[:12]
 
     def _cookie_ok(self, pending: dict[str, Any] | None, request: Request) -> bool:
-        value = request.cookies.get(self.cookie_name, "")
-        return bool(pending and value and pending.get("cookie")
-                    and hmac.compare_digest(pending["cookie"], token_hash(value)))
+        if not pending or not pending.get("cookie") or not pending.get("cookie_name"):
+            return False
+        value = request.cookies.get(pending["cookie_name"], "")
+        return bool(value) and hmac.compare_digest(pending["cookie"], token_hash(value))
 
     def _expired(self) -> Response:
         return HTMLResponse(pages.notice("Sign-in expired", "Start again from your app: this sign-in is older "
@@ -158,12 +164,11 @@ class Remote:
         pending = self.provider.get_pending(key)
         if not pending or pending.get("cookie"):
             return self._expired()
-        value = new_cookie()
+        value, name = new_cookie(), self.cookie_name(key)
         verifier, challenge = google.pkce()
-        pending.update(cookie=token_hash(value), google_verifier=verifier)
+        pending.update(cookie=token_hash(value), cookie_name=name, google_verifier=verifier)
         resp = RedirectResponse(google.authorize_url(self.settings.client, key, challenge), status_code=302)
-        resp.set_cookie(self.cookie_name, value, max_age=600, path="/", httponly=True, samesite="lax",
-                        secure=self.settings.base_url.startswith("https://"))
+        resp.set_cookie(name, value, max_age=600, path="/", httponly=True, samesite="lax", secure=self.secure)
         return resp
 
     async def google_callback(self, request: Request) -> Response:
@@ -171,9 +176,9 @@ class Remote:
         pending = self.provider.get_pending(q.get("state", ""))
         if not pending or pending.get("sub") or not pending.get("google_verifier"):
             return self._expired()
+        self.provider.pop_pending(q["state"])   # spent either way: a wrong browser ends it too
         if not self._cookie_ok(pending, request):
             return self._expired()
-        self.provider.pop_pending(q["state"])
         if q.get("error") or not q.get("code"):
             return RedirectResponse(self.provider.refuse(pending, "access_denied", "Google sign-in was cancelled"),
                                     status_code=302)
@@ -260,9 +265,10 @@ class Remote:
         self.provider.pop_pending(p)   # one answer per consent page, even if the form is sent twice
         resp = await anyio.to_thread.run_sync(self._consent_submit, form, pending)
         if resp.status_code == 400:   # a failed pick or create: let them try again on the same page
-            self.provider.pending[p] = pending
+            self.provider.new_pending(pending, key=p)
         else:
-            resp.delete_cookie(self.cookie_name, path="/")
+            resp.delete_cookie(pending["cookie_name"], path="/", secure=self.secure, httponly=True,
+                               samesite="lax")
         return resp
 
     def _consent_submit(self, form: dict[str, str], pending: dict[str, Any]) -> Response:
@@ -304,7 +310,7 @@ def build(settings: Settings):
     """Wire the shared MCPServer for HTTP with sign-in, and return (remote, ASGI app)."""
     storage = Storage(settings.data_dir, settings.secret_key)
     resource = f"{settings.base_url}/mcp"
-    provider = Provider(storage, settings.base_url, resource, settings.allowed, settings.redirect_hosts)
+    provider = Provider(storage, settings.base_url, resource, settings.allowed, settings.redirects)
     remote = Remote(settings, storage, provider)
     mcp = server.mcp
     mcp.settings.auth = AuthSettings(
@@ -326,8 +332,38 @@ def build(settings: Settings):
         mcp.custom_route("/", ["GET"])(_home)
         mcp._tracker_remote_routes = True
     remote_ref[0] = remote
-    app = mcp.streamable_http_app(host="0.0.0.0")
+    app = RateLimit(mcp.streamable_http_app(host="0.0.0.0"))
     return remote, app
+
+
+class RateLimit:
+    """Per-address limits on the endpoints anyone can call without signing in."""
+
+    LIMITS = {("POST", "/register"): 10, ("GET", "/authorize"): 30, ("GET", "/start"): 30}   # per minute
+
+    def __init__(self, app):
+        self.app = app
+        self.hits: dict[tuple[str, str, str], list[float]] = {}
+
+    def __getattr__(self, name):   # router, state, … of the wrapped Starlette app
+        return getattr(self.app, name)
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            limit = self.LIMITS.get((scope["method"], scope["path"]))
+            if limit:
+                ip = (scope.get("client") or ("?", 0))[0]
+                key, now = (ip, scope["method"], scope["path"]), time.monotonic()
+                recent = [t for t in self.hits.get(key, []) if t > now - 60]
+                if len(recent) >= limit:
+                    await PlainTextResponse("Too many requests; try again in a minute.", status_code=429)(
+                        scope, receive, send)
+                    return
+                recent.append(now)
+                self.hits[key] = recent
+                if len(self.hits) > 10000:
+                    self.hits.clear()
+        await self.app(scope, receive, send)
 
 
 remote_ref: list[Any] = [None]   # the routes are registered once; tests build several servers
@@ -373,5 +409,7 @@ def main(argv: list[str] | None = None) -> int:
 
     _, app = build(Settings.from_env())
     print(f"tracker-mcp remote on {a.host}:{a.port}", file=sys.stderr)
-    uvicorn.run(app, host=a.host, port=a.port, proxy_headers=True, forwarded_allow_ips="*", log_level="info")
+    # no access log: its lines would carry sign-in ids and Google codes in query strings
+    uvicorn.run(app, host=a.host, port=a.port, proxy_headers=True, forwarded_allow_ips="*", log_level="info",
+                access_log=False)
     return 0

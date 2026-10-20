@@ -6,7 +6,7 @@ WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 COPY examples ./examples
-RUN pip install . && useradd --system --uid 10001 tracker
+RUN pip install . && groupadd --system --gid 10001 tracker && useradd --system --uid 10001 --gid 10001 tracker
 USER tracker
 ENV TRACKER_MCP_DATA_DIR=/data PORT=8080
 EXPOSE 8080

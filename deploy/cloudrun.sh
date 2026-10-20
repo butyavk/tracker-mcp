@@ -39,8 +39,8 @@ echo "JavaScript origin:     $BASE   (for the Drive file picker)"
 export CLOUDSDK_CORE_PROJECT="$PROJECT"   # for this script only; your gcloud setting stays as it was
 echo "Enabling APIs (a minute the first time)…"
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com \
-  secretmanager.googleapis.com storage.googleapis.com iam.googleapis.com sheets.googleapis.com \
-  picker.googleapis.com >/dev/null
+  secretmanager.googleapis.com storage.googleapis.com iam.googleapis.com compute.googleapis.com \
+  sheets.googleapis.com picker.googleapis.com >/dev/null   # compute: its default account runs the build
 
 # source deploys build with the Compute Engine default service account (Cloud Build's
 # default since 2024); it needs the Cloud Run Builder role
