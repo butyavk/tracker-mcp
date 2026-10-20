@@ -154,10 +154,10 @@ https://raw.githubusercontent.com/butyavk/tracker-mcp/main/docs/agent-setup.md
   <h3>3. Адрес сервера</h3>
   <p>Открыть <a href="https://shell.cloud.google.com/">Cloud Shell</a> (первый раз попросит
   Authorise) и выполнить:</p>
-  <pre><code>git clone -b remote-server https://github.com/butyavk/tracker-mcp &amp;&amp; cd tracker-mcp
+  <pre><code>git clone https://github.com/butyavk/tracker-mcp &amp;&amp; cd tracker-mcp
 ./deploy/cloudrun.sh --project &lt;ID проекта&gt; --dry-run</code></pre>
   <p>Скрипт напечатает адрес вашего сервера, JavaScript origin и redirect URI и ничего не
-  создаст. Когда выйдет версия 0.5.0, <code>-b remote-server</code> будет не нужен.</p>
+  создаст.</p>
 
   <h3>4. OAuth-клиент</h3>
   <ol>
@@ -194,7 +194,7 @@ https://raw.githubusercontent.com/butyavk/tracker-mcp/main/docs/agent-setup.md
       </ul>
     </li>
     <li>В новом чате: «опиши мой трекер». Первый раз Claude спросит разрешение на инструмент —
-      <strong>Allow</strong>. Саму запись вы подтверждаете словом «да» после его предпросмотра.</li>
+      <strong>Allow</strong>. Саму запись подтверждаете после его предпросмотра фразой, где названо изменение, например «да, строка 12: статус → Интервью»: голое «да» claude.ai может не принять.</li>
   </ol>
   <p>Своя таблица подойдёт, если в ней есть строка заголовков (компания, роль, статус, дата
   подачи) и колонка статуса, лучше выпадающим списком: статусы берутся оттуда. Заголовки
@@ -271,7 +271,7 @@ https://raw.githubusercontent.com/butyavk/tracker-mcp/main/docs/agent-setup.md
     <tr><td>«this server is private» после входа</td><td>Этого gmail нет в списке сервера. Перезапустить деплой с нужным <code>--allow</code></td></tr>
     <tr><td>Сервер не видит таблицу или пишет про доступ</td><td>Скорее всего, не поставили галочку про Google Drive. Disconnect, Connect заново и поставить</td></tr>
     <tr><td>В окне выбора есть файл .xlsx</td><td>Его не брать: сервер работает только с Google Таблицами (зелёная иконка без «X»). Сначала импорт</td></tr>
-    <tr><td>Claude не пишет, а показывает предпросмотр</td><td>Так и задумано. Ответить «да» самому, следующим сообщением. Если Claude просит разрешение на инструмент — Allow</td></tr>
+    <tr><td>Claude не пишет, а показывает предпросмотр</td><td>Так и задумано. Ответить самому, следующим сообщением. В claude.ai (свой сервер) — фразой, где названо изменение: «да, строка 12: статус → Интервью»; голое «да» claude.ai может не принять. Если Claude просит разрешение на инструмент — Allow</td></tr>
     <tr><td>Запись отказала: таблица изменилась</td><td>Кто-то (вы или другой чат) поправил таблицу после чтения. Попросить перечитать и повторить</td></tr>
     <tr><td>Claude путает колонки или статусы</td><td>«Опиши мой трекер» и посмотреть, что он понял. Статусы берутся из выпадающего списка — если его нет, сделать</td></tr>
     <tr><td>На своём сервере вход отваливается через неделю</td><td>Приложение в режиме Testing. Google Auth Platform → Audience → Publish app</td></tr>

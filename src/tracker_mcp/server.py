@@ -286,6 +286,19 @@ def ask(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], *,
     return BY_TOKEN
 
 
+_NEXT = ("Nothing is written yet. Show the user this preview and stop: end your turn and wait for "
+         "their answer. Only after the user says yes in a new message, repeat the call with "
+         "confirm=<this token>. Never confirm on the user's behalf, and not in the same turn as the preview.")
+# Clients on the web (claude.ai) check consent before a tool writes to an outside service, and a
+# bare "yes" may not pass: the user's reply should name the change it approves.
+_NEXT_REMOTE = ("Nothing is written yet. Show the user this preview and stop: end your turn and ask them "
+                "to confirm in a reply that names the change, for example \"yes, row 12: status -> "
+                "Interview\", in their language; a bare \"yes\" may be refused by the client's own "
+                "safeguards. Only after they confirm in a new message, repeat the call with "
+                "confirm=<this token>. Never confirm on the user's behalf, and not in the same turn "
+                "as the preview.")
+
+
 def finish(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], approval: Any, *,
            dry_run: bool, confirm: str | None) -> dict[str, Any]:
     """Tool body: return the preview, or write the approved plan."""
@@ -296,11 +309,8 @@ def finish(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], appro
         return plan
     token = plan_token(plan)
     if dry_run:
-        return {**plan, "confirm": token, "preview": describe_plan(method, plan),
-                "next": ("Nothing is written yet. Show the user this preview and stop: end your turn and "
-                         "wait for their answer. Only after the user says yes in a new message, repeat the "
-                         "call with confirm=<this token>. Never confirm on the user's behalf, and not in "
-                         "the same turn as the preview.")}
+        return {**plan, "confirm": token, "preview": describe_plan(method, plan), "next": _NEXT_REMOTE
+                if _resolver is not None else _NEXT}
     if not isinstance(approval, AcceptedElicitation):
         raise ToolError("The user did not confirm; nothing was written.")
     answer = approval.data

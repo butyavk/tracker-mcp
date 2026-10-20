@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.5.0 — unreleased
+## 0.5.0 — 2026-10-20
 
 Added
 - `tracker-mcp remote`: the same tools over streamable HTTP for Google Sheets trackers,
@@ -14,6 +14,8 @@ Added
   client and lets you pick your sheet in Google's file picker or start a new one.
 - `Dockerfile` and `deploy/cloudrun.sh`: one Cloud Run instance with a private Cloud
   Storage bucket for its data and Secret Manager for its keys.
+- On a remote server, a preview asks the user to confirm with a reply that names the
+  change: claude.ai may refuse a write to an outside service approved with a bare "yes".
 
 ## 0.4.4 — 2026-10-20
 

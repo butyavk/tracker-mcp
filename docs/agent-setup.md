@@ -103,7 +103,7 @@ URI that `./deploy/cloudrun.sh --project <id> --dry-run` prints. The deploy then
 Cloud Shell (or locally with gcloud signed in):
 
 ```sh
-git clone -b remote-server https://github.com/butyavk/tracker-mcp && cd tracker-mcp
+git clone https://github.com/butyavk/tracker-mcp && cd tracker-mcp
 ./deploy/cloudrun.sh --project <id> --client-id <web client id> --allow <their gmail>
 ```
 

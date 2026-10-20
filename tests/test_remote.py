@@ -200,6 +200,7 @@ def test_sign_in_pick_a_sheet_and_use_the_tools(live):
         prev = await live.call(tok["access_token"], "set_status", {"row": 2, "status": "Interview", "dry_run": True})
         token = prev.structured_content["confirm"]
         assert "end your turn" in prev.structured_content["next"]
+        assert "names the change" in prev.structured_content["next"]   # web clients want a specific yes
         res = await live.call(tok["access_token"], "set_status", {"row": 2, "status": "Interview",
                                                                   "confirm": token})
         assert not res.is_error, res.content[0].text

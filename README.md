@@ -258,7 +258,9 @@ How the sign-in goes:
 5. Claude gets the server's own tokens (an hour, refreshed for 30 days, rotated on every
    use), never your Google token, which the server keeps encrypted.
 
-Writes work as on your computer: preview, your yes, a backup, undo. The server keeps
+Writes work as on your computer: preview, your yes, a backup, undo. In claude.ai answer
+the preview with a yes that names the change ("yes, row 12: status → Interview"): its
+own safeguards may refuse a write approved with a bare "yes". The server keeps
 the backups and the audit log per person. Not available remotely:
 `export_followups_calendar` (no files to hand you; use the calendar prompt) and Excel or
 CSV files.
