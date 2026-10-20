@@ -115,8 +115,11 @@ gcloud run deploy "$SERVICE" --source . --region "$REGION" --service-account "$S
   --set-env-vars "$ENV" \
   --set-secrets TRACKER_MCP_SECRET_KEY=tracker-mcp-secret-key:latest,GOOGLE_WEB_CLIENT_SECRET=tracker-mcp-google-client-secret:latest
 
-URL=$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')
 echo
-echo "Done. Health check: $(curl -s "$BASE/health")"
-[ "$URL" = "$BASE" ] || echo "Note: Cloud Run reports $URL; the server is configured for $BASE."
+HEALTH=$(curl -s --max-time 20 "$BASE/health" || true)
+echo "Done. Health check: ${HEALTH:-no answer}"
+if [ "$HEALTH" != ok ]; then   # Cloud Run also serves a hashed address; the server only answers as $BASE
+  URL=$(gcloud run services describe "$SERVICE" --region "$REGION" --format='value(status.url)')
+  echo "Note: $BASE did not answer yet; Cloud Run reports $URL. Try the health check again in a minute."
+fi
 echo "In Claude: Settings → Connectors → Add custom connector → $BASE/mcp"

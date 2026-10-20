@@ -18,6 +18,7 @@ main { max-width:560px; margin:48px auto; padding:0 16px; }
 h1 { font-size:22px; margin:0 0 12px; }
 p { margin:8px 0; } .muted { color:var(--muted); font-size:14px; }
 code { font-size:14px; }
+a { color:var(--accent); }
 .row { display:flex; flex-wrap:wrap; gap:8px; margin-top:20px; }
 button, a.button { font:inherit; padding:10px 16px; border-radius:8px; border:1px solid var(--line);
   background:var(--card); color:var(--fg); cursor:pointer; text-decoration:none; }
