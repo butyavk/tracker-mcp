@@ -33,6 +33,8 @@ service-account assertion.
 from __future__ import annotations
 
 import base64
+import contextlib
+import contextvars
 import hashlib
 import http.server
 import json
@@ -381,6 +383,21 @@ def _safe_title(title: str, used: set[str]) -> str:
     return safe
 
 
+# The remote server signs each user in separately: while it works for one user, their
+# Google transport is set here, and every SheetsStore opened meanwhile (by init and
+# check too) uses it instead of the token file of the local install.
+_transport: contextvars.ContextVar[Transport | None] = contextvars.ContextVar("tracker_mcp_transport", default=None)
+
+
+@contextlib.contextmanager
+def use_transport(transport: Transport):
+    token = _transport.set(transport)
+    try:
+        yield
+    finally:
+        _transport.reset(token)
+
+
 class SheetsStore:
     kind = "gsheet"
     single_sheet = False
@@ -390,7 +407,7 @@ class SheetsStore:
         self.path = None
         self.label = f"Google Sheet {self.id}"
         self.backup_dir = Path(backup_dir).expanduser() if backup_dir else home_dir() / "backups" / self.id
-        self._call = transport or http_transport(GoogleAuth())
+        self._call = transport or _transport.get() or http_transport(GoogleAuth())
         self._loaded: dict[str, dict] = {}   # version -> {"cells", "kinds", "sheets"} of that read
 
     # ---- reading

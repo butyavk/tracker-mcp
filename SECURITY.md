@@ -7,8 +7,8 @@ vulnerability* on this repository), not in a public issue.
 
 ## Threat model
 
-tracker-mcp runs on your computer, started by your MCP client over stdio. It does
-not listen on the network; the one exception is `tracker-mcp auth google`, which
+tracker-mcp runs on your computer, started by your MCP client over stdio (for the
+optional remote server, see below). It does not listen on the network; the one exception is `tracker-mcp auth google`, which
 waits on 127.0.0.1 for Google's redirect during sign-in, ignores any request that
 does not carry its random state, and gives up after five minutes. What it can reach:
 
@@ -31,6 +31,29 @@ does not carry its random state, and gives up after five minutes. What it can re
   on Google's screen, and only for the files they pick. The secret is not kept in git.
 
 No telemetry. The only outgoing connections are to Google, for a Sheets tracker.
+
+### The remote server (`tracker-mcp remote`)
+
+It listens on the network, so it is a different model:
+
+- **Who gets in:** a Google sign-in whose e-mail is on the server's allow-list. The
+  list is checked at sign-in, on every token use and on every refresh, so taking
+  someone off it ends their access at once.
+- **What an MCP client gets:** the server's own tokens after OAuth 2.1 with PKCE and
+  dynamic client registration: an access token for an hour and a refresh token for 30
+  days, rotated on every use, bound to the server's address (RFC 8707). Tokens are
+  stored only as SHA-256 hashes; authorization codes work once, for five minutes.
+- **Consent:** after Google, a page names the connecting client and the address it
+  returns to, the account and the sheet, so a client registered by someone else
+  cannot quietly get a token for you; the page refuses to be framed.
+- **Google access:** `openid email drive.file`, so only the sheets each person picks
+  or the server creates for them. Their Google refresh token is kept encrypted (a
+  key outside the data folder, in Secret Manager on Cloud Run) and never sent to MCP
+  clients. The consent page hands the person's own short-lived Google token to
+  Google's file picker in their browser.
+- **What it does not defend against:** whoever runs the server can read the data of
+  the people who use it, and anyone with access to its project can reach the sheets
+  through it. Run one for yourself and people you know.
 
 ### What it defends against
 

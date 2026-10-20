@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 — unreleased
+
+Added
+- `tracker-mcp remote`: the same tools over streamable HTTP for Google Sheets trackers,
+  to add to Claude as a custom connector (web, desktop, phone). Several people per
+  server, each signed in with Google and working on their own sheet. The server is its
+  own OAuth 2.1 authorization server for MCP clients: dynamic client registration,
+  PKCE, refresh tokens rotated on every use, revocation, tokens bound to the server's
+  address and stored only as hashes. Google behind it for who signs in (`openid email`,
+  checked against an allow-list on every token use) and for the sheets (`drive.file`);
+  each person's Google sign-in is kept encrypted. A consent page names the connecting
+  client and lets you pick your sheet in Google's file picker or start a new one.
+- `Dockerfile` and `deploy/cloudrun.sh`: one Cloud Run instance with a private Cloud
+  Storage bucket for its data and Secret Manager for its keys.
+
 ## 0.4.4 — 2026-10-20
 
 Added

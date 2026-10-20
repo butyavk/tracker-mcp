@@ -222,6 +222,52 @@ publish it (Audience → Publish app) to keep it.
 service account's e-mail, and set `GOOGLE_APPLICATION_CREDENTIALS=/path/key.json` in the
 server's environment. The server can then reach only the sheets you share with it.
 
+## Remote server: Claude on the web and on your phone
+
+Everything above runs on your computer, so Claude reaches the tracker only from that
+computer. `tracker-mcp remote` serves the same tools over HTTP from a server you run,
+for Google Sheets trackers: add it to Claude as a custom connector (Settings →
+Connectors → Add custom connector → `https://<your server>/mcp`) and it works in Claude
+on the web, the desktop app and the phone. Several people can use one server; each
+signs in with Google and works on their own sheet.
+
+How the sign-in goes:
+
+1. Claude registers with the server (OAuth dynamic client registration) and opens its
+   sign-in page.
+2. The server sends you to Google: your e-mail and `drive.file`, the files you pick.
+3. The server checks your e-mail against its allow-list.
+4. A consent page says which app is connecting, as whom and to which sheet. Pick your
+   tracker in Google's file picker, start a new one, or continue with the sheet you
+   chose last time.
+5. Claude gets the server's own tokens (an hour, refreshed for 30 days, rotated on every
+   use), never your Google token, which the server keeps encrypted.
+
+Writes work as on your computer: preview, your yes, a backup, undo. The server keeps
+the backups and the audit log per person. Not available remotely:
+`export_followups_calendar` (no files to hand you; use the calendar prompt) and Excel or
+CSV files.
+
+**Running one** on Google Cloud Run, from [Cloud Shell](https://shell.cloud.google.com/):
+
+```sh
+git clone https://github.com/butyavk/tracker-mcp && cd tracker-mcp
+./deploy/cloudrun.sh --project <project-id> --dry-run     # prints the addresses to register
+./deploy/cloudrun.sh --project <project-id> --client-id <web client id> \
+    --allow you@gmail.com,friend@gmail.com --picker-key <API key>
+```
+
+Before that, in the project: billing on; an OAuth client of type **Web application**
+with the redirect URI and JavaScript origin the dry run prints; the **Google Picker
+API** enabled and an API key restricted to it and to your server's address. The script
+creates a private Cloud Storage bucket for the server's data, an encryption key in
+Secret Manager, asks for the client's secret without showing it, and deploys one
+instance. At personal use it fits Cloud Run's free tier; the bucket costs cents.
+
+Other hosts: the [Dockerfile](Dockerfile) runs `tracker-mcp remote`; the settings are in
+`tracker-mcp remote --help`. Whoever runs a server can reach the sheets of the people
+who sign in to it, so use one run by someone you trust.
+
 ## What Claude can do with it
 
 | Tool | Kind | What it does |
@@ -393,6 +439,8 @@ bracket or dash ("Ashby (direct form)" → "Ashby"), or by substrings you list i
 - Undo goes back one step only. For a Google Sheet it restores values, not formatting.
 - Without a dialog, the token proves that a preview was made and nothing drifted
   since. It cannot prove the model showed you that preview.
+- The remote server keeps its data as files and runs as one instance; it is meant for
+  a person and a few friends, not for a crowd.
 
 ## macOS: Claude Desktop and your Documents folder
 

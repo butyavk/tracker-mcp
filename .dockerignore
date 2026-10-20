@@ -1,0 +1,14 @@
+.git
+.github
+.venv
+**/__pycache__
+tests
+evals
+docs
+macos
+mcpb
+plugin
+dist
+*.xlsx
+*.csv
+src/tracker_mcp/_google_client.py

@@ -16,18 +16,19 @@
     <a href="https://github.com/butyavk/tracker-mcp/issues">Help</a>
   </nav>
   <h1>Privacy policy</h1>
-  <p class="lead">Effective 19 October 2026</p>
+  <p class="lead">Effective 20 October 2026</p>
 </header>
 <main>
   <p>tracker-mcp is free, open-source software that runs on your own computer. It connects an
   AI assistant of your choice to the spreadsheet where you track job applications. This policy
   explains what data tracker-mcp accesses, how it uses and stores that data, and how you can
-  remove it. It applies to the tracker-mcp program, its Claude plugin and its Claude Desktop
-  extension.</p>
+  remove it. It applies to the tracker-mcp program, its Claude plugin, its Claude Desktop
+  extension, and the remote tracker-mcp server that the developer runs for invited people.</p>
 
-  <p class="note">In short: tracker-mcp has no servers and no telemetry. The developer never
-  receives, sees or stores your data. Everything tracker-mcp reads stays between your computer,
-  the spreadsheet you chose, and the AI assistant you asked.</p>
+  <p class="note">In short: run on your computer, tracker-mcp has no servers and no telemetry,
+  and the developer never receives, sees or stores your data. The one exception is the remote
+  server, which you use only if you were invited and add it as a connector; what it keeps is
+  described below.</p>
 
   <h2>Data tracker-mcp accesses</h2>
   <h3>A tracker file on your computer</h3>
@@ -48,8 +49,15 @@
       for example a new row, a status or a follow-up date; it then reads the changed cells back to
       check the write.</li>
   </ul>
-  <p>tracker-mcp does not access your other Drive files, Gmail, contacts, calendar, or your
-  profile, name or e-mail address.</p>
+  <p>Run on your computer, tracker-mcp does not access your other Drive files, Gmail, contacts,
+  calendar, or your profile, name or e-mail address.</p>
+
+  <h3>The remote server</h3>
+  <p>If you add the developer's remote tracker-mcp server to your AI assistant as a connector
+  (invited people only), you sign in with Google on the server. It asks for your e-mail address
+  (scopes <code>openid email</code>), to check that you are on its list of invited people, and for
+  <code>drive.file</code> as above, to work with the spreadsheet you pick or that it creates for
+  you. It reads and writes that spreadsheet in the same way, after your confirmation.</p>
 
   <h2>How the data is used</h2>
   <p>Data from your tracker is used only to provide the features you ask for: answering your
@@ -76,14 +84,26 @@
     <li><strong>In transit:</strong> tracker-mcp talks to Google only over HTTPS, directly from your
       computer.</li>
   </ul>
-  <p>The developer operates no server and has no copy of any of this data.</p>
+  <p>For tracker-mcp on your computer, the developer operates no server and has no copy of any of
+  this data.</p>
+  <p><strong>The remote server</strong> runs on Google Cloud in the developer's own project. For
+  each person who signs in it keeps: the e-mail address; the Google sign-in (a refresh token,
+  encrypted with a key kept separately in Google Secret Manager); the id of the chosen
+  spreadsheet; the column configuration; backups of changed cells and a log of its writes. The
+  tokens it gives your AI assistant are stored only as one-way hashes. The data is in a private
+  Cloud Storage bucket that only the server can read; the developer, as the operator, has
+  technical access to it and does not look at it except to fix a problem you report.</p>
 
   <h2>Sharing</h2>
   <p>tracker-mcp does not share your data with anyone. The only places it goes are the ones you
-  set up: your spreadsheet (on your computer or in your Google account) and the AI assistant you
-  use tracker-mcp with.</p>
+  set up: your spreadsheet (on your computer or in your Google account), the AI assistant you
+  use tracker-mcp with, and, if you use it, the remote server described above.</p>
 
   <h2>Retention and deletion</h2>
+  <p>On the remote server, your data stays until you ask for its removal: remove the connector,
+  withdraw access at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>,
+  and open an issue or write to the developer to have your folder deleted. Expired tokens are
+  deleted automatically.</p>
   <p>Data stays on your computer for as long as you keep it. To remove everything tracker-mcp
   has stored, delete the <code>~/.tracker-mcp</code> folder and the <code>backups-tracker-mcp</code>
   folder next to your tracker file. To withdraw tracker-mcp's access to your Google account,

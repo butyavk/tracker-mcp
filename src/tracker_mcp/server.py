@@ -13,6 +13,7 @@ without the user's yes.
     tracker-mcp example                             # print a commented config
     tracker-mcp auth google                         # sign in once, for Google Sheets
     tracker-mcp calendar --tracker ~/tracker.xlsx   # follow-ups as an .ics file for a calendar
+    tracker-mcp remote                              # over HTTP with Google sign-in (Google Sheets)
 """
 
 from __future__ import annotations
@@ -146,8 +147,15 @@ def make_tracker(first_run: bool = True) -> Tracker:
     return t
 
 
+# The remote server (tracker_mcp.remote) sets this: it returns the signed-in user's own
+# tracker for the current request instead of the one TRACKER_PATH names.
+_resolver: Any = None
+
+
 def tracker() -> Tracker:
     global _tracker
+    if _resolver is not None:
+        return _resolver()
     if _tracker is None:
         _tracker = make_tracker()
     elif _watch is not None and _stamp(_watch[0]) != _watch[1]:
@@ -193,7 +201,17 @@ class WriteConfirmation(BaseModel):
 
 
 SKIP, BY_TOKEN = "skip", "token"   # resolver outcomes when no dialog is shown
-_plans: OrderedDict[str, dict[str, Any]] = OrderedDict()   # request id -> plan, resolver -> body
+_plans: OrderedDict[tuple[int, str], dict[str, Any]] = OrderedDict()   # request -> plan, resolver -> body
+
+
+def _plan_key(ctx: Context) -> tuple[int, str]:
+    """A request's key: request ids repeat across sessions, so the session goes with it
+    (over HTTP many clients share one server)."""
+    try:
+        session = id(ctx.session)
+    except Exception:  # noqa: BLE001 - no session: in-process tests
+        session = 0
+    return session, str(ctx.request_id)
 
 
 def plan_token(plan: dict[str, Any]) -> str:
@@ -251,7 +269,7 @@ def ask(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], *,
         expected_version: str | None, dry_run: bool) -> Elicit[WriteConfirmation] | str:
     """Resolver body: make the plan and decide how the user approves it."""
     plan = call(method, *args, dry_run=True, expected_version=expected_version, **kwargs)
-    _plans[ctx.request_id] = plan
+    _plans[_plan_key(ctx)] = plan
     while len(_plans) > 50:
         _plans.popitem(last=False)
     if dry_run or not _has_work(plan) or not tracker().cfg.safety.confirm_writes:
@@ -265,7 +283,7 @@ def ask(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], *,
 def finish(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], approval: Any, *,
            dry_run: bool, confirm: str | None) -> dict[str, Any]:
     """Tool body: return the preview, or write the approved plan."""
-    plan = _plans.pop(ctx.request_id, None)
+    plan = _plans.pop(_plan_key(ctx), None)
     if plan is None:  # not expected: the resolver runs first in the same request
         raise ToolError("Internal: no plan for this call; retry.")
     if not _has_work(plan):
@@ -700,6 +718,9 @@ def export_followups_calendar(
     today), to import into Calendar, Outlook or Google Calendar; the tracker itself is
     not touched. If your client has a calendar tool, you can add the events there
     instead: followups_due has the same data."""
+    if _resolver is not None:
+        raise ToolError("This server runs in the cloud and keeps no files for you: use calendar_events with "
+                        "your calendar tool (the sync_calendar prompt) instead.")
     return call("export_calendar", None, days)
 
 
@@ -860,6 +881,9 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(cli(argv))
     if argv[:1] == ["calendar"]:
         sys.exit(calendar_cli(argv[1:]))
+    if argv[:1] == ["remote"]:
+        from .remote.app import main as remote_main
+        sys.exit(remote_main(argv[1:]))
     parser = argparse.ArgumentParser(
         prog="tracker-mcp", description="MCP server (stdio) over a job-application tracker.",
         epilog="Getting started: `tracker-mcp init <tracker>` writes a config for your tracker "
