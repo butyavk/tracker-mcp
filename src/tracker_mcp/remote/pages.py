@@ -42,7 +42,7 @@ def notice(title: str, text: str, back: str | None = None) -> str:
 
 
 def consent(*, pending: str, client_name: str | None, redirect_uri: str, email: str,
-            sheet_title: str | None, picker: bool) -> str:
+            sheet_title: str | None, picker: bool, lang: str = "en") -> str:
     """Which client gets access, as whom, to which sheet. The client name is the client's
     own claim, so the address it returns to is shown just as plainly."""
     who = html.escape(client_name or "An MCP client")
@@ -70,7 +70,10 @@ at that address.</p>{local}
 <input type=hidden name=p value="{p}"><input type=hidden name=sheet_id id=sheet_id>
 <div class=row>{cont}{pick}
 <button name=action value=create>Start a new tracker sheet</button>
-<button name=action value=cancel>Cancel</button></div></form>"""
+<button name=action value=cancel>Cancel</button></div>
+<p class=muted>A new sheet's columns and statuses: <select name=lang>
+<option value=en{" selected" if lang != "ru" else ""}>English</option>
+<option value=ru{" selected" if lang == "ru" else ""}>Русский</option></select></p></form>"""
     script = ""
     if picker:
         script = """<script src="https://apis.google.com/js/api.js"></script><script>

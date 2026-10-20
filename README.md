@@ -166,7 +166,8 @@ uvx tracker-mcp --check --tracker ~/Documents/job-tracker.xlsx   # how the confi
 ```
 
 No tracker yet? `uvx tracker-mcp new ~/Documents/job-tracker.xlsx` creates an empty
-one with dropdowns, a filter, a summary sheet and its config.
+one with dropdowns, a filter, a summary sheet and its config; add `--lang ru` for Russian
+headers and statuses.
 
 ### A weekly routine
 

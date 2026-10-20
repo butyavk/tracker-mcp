@@ -117,6 +117,29 @@ def test_new_tracker_works_end_to_end(tmp_path):
         new_tracker(book)
 
 
+def test_new_tracker_in_russian(tmp_path):
+    book, _ = new_tracker(tmp_path / "jobs.xlsx", lang="ru")
+    cfg = load_config(book)
+    assert (cfg.sheet, cfg.summary_sheet) == ("Отклики", "Сводка")
+    assert cfg.columns["company"] == "Компания" and cfg.columns["reached"] == "Дошли до"
+    assert cfg.columns["applied_on"] == "Дата подачи" and cfg.columns["replied_on"] == "Дата ответа"
+    t = Tracker(book, config=cfg, today=lambda: TODAY)
+    t.add_application("Acme", "Engineering Manager")
+    t.mark_applied(2, channel="LinkedIn")
+    t.set_status(2, "Интервью")
+    t.set_status(2, "Отказ")
+    got = t.get_application(row=2)["applications"][0]
+    assert (got["status"], got["reached"]) == ("Отказ", "Интервью")
+    assert "подано" in str(got.get("followup_log"))                 # Russian log lines
+    assert t.funnel()["total"]["interview"] == 1
+    summary = openpyxl.load_workbook(book)["Сводка"]
+    assert summary["B3"].value.endswith(',"Подана")')
+    csv, _ = new_tracker(tmp_path / "plain.csv", lang="ru")
+    assert csv.read_text(encoding="utf-8").startswith("№,Компания,Роль")
+    with pytest.raises(TrackerError, match="No template"):
+        new_tracker(tmp_path / "x.xlsx", lang="de")
+
+
 def test_funnel_on_my_layout(tmp_path):
     t = ru_tracker(tmp_path / "t.xlsx")
     t.set_status(7, "Тех.этап")

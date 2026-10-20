@@ -22,6 +22,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import openpyxl
 from openpyxl.styles import Font, PatternFill
@@ -494,17 +495,49 @@ def check(target: str, text: str) -> None:
 
 # ---------------------------------------------------------------- new
 
-TEMPLATE_HEADERS = ["#", "Company", "Role", "Location", "Salary", "Link", "Found via", "Applied on", "Applied via",
-                    "Status", "Furthest stage", "Priority", "Next step", "Response", "Replied on",
-                    "Follow-up date", "Follow-up contact", "Follow-up log", "Notes"]
-TEMPLATE_STATUSES = ["Not applied", "Applied", "Screening", "Interview", "Offer", "Rejected", "Withdrawn",
-                     "No response", "Closed"]
+# The `new` template, in English and Russian. The same columns in the same order; init
+# maps either set of headers and statuses to the same fields and meanings.
+TEMPLATES: dict[str, dict[str, Any]] = {
+    "en": {
+        "headers": ["#", "Company", "Role", "Location", "Salary", "Link", "Found via", "Applied on",
+                    "Applied via", "Status", "Furthest stage", "Priority", "Next step", "Response",
+                    "Replied on", "Follow-up date", "Follow-up contact", "Follow-up log", "Notes"],
+        "statuses": ["Not applied", "Applied", "Screening", "Interview", "Offer", "Rejected", "Withdrawn",
+                     "No response", "Closed"],
+        "stages": ["Screening", "Interview", "Offer"],
+        "priorities": ["High", "Medium", "Low"],
+        "sheet": "Applications", "summary": "Summary", "title": "Job applications",
+        "summary_rows": ["Applications", "Submitted", "Waiting", "Reached an interview"],
+    },
+    "ru": {
+        "headers": ["№", "Компания", "Роль", "Локация", "Зарплата", "Ссылка", "Откуда узнал", "Дата подачи",
+                    "Канал подачи", "Статус", "Дошли до", "Приоритет", "Следующий шаг", "Ответ",
+                    "Дата ответа", "Фоллоу-ап — дата", "Фоллоу-ап — кому", "Фоллоу-ап — лог", "Заметки"],
+        "statuses": ["Не подавался", "Подана", "Скрининг", "Интервью", "Оффер", "Отказ", "Отозвал",
+                     "Ответа нет", "Закрыта"],
+        "stages": ["Скрининг", "Интервью", "Оффер"],
+        "priorities": ["Высокий", "Средний", "Низкий"],
+        "sheet": "Отклики", "summary": "Сводка", "title": "Трекер откликов",
+        "summary_rows": ["Откликов", "Подано", "Ждём ответа", "Дошли до интервью"],
+    },
+}
+TEMPLATE_HEADERS = TEMPLATES["en"]["headers"]
+TEMPLATE_STATUSES = TEMPLATES["en"]["statuses"]
 TEMPLATE_WIDTHS = [5, 22, 30, 16, 14, 30, 16, 12, 16, 14, 14, 10, 24, 30, 12, 14, 24, 40, 40]
 
 
-def new_tracker(path: str | Path, *, force_config: bool = False) -> tuple[Path, Path]:
+def template(lang: str = "en") -> dict[str, Any]:
+    if lang not in TEMPLATES:
+        raise TrackerError(f"No template in {lang!r}; there are: {', '.join(TEMPLATES)}.")
+    return TEMPLATES[lang]
+
+
+def new_tracker(path: str | Path, *, force_config: bool = False, lang: str = "en") -> tuple[Path, Path]:
     """An empty tracker that every tool works with, plus its config (made by init).
-    .xlsx gets dropdowns, a filter and a summary sheet; .csv gets the header row."""
+    .xlsx gets dropdowns, a filter and a summary sheet; .csv gets the header row.
+    `lang` picks the headers and statuses: "en" or "ru"."""
+    t = template(lang)
+    headers, i = t["headers"], {k: n for n, k in enumerate(TEMPLATE_HEADERS)}
     path = Path(path).expanduser().resolve()
     if path.suffix.lower() not in (".xlsx", ".csv"):
         raise TrackerError("The tracker must be an .xlsx or a .csv file. For Google Sheets, import the "
@@ -517,35 +550,37 @@ def new_tracker(path: str | Path, *, force_config: bool = False) -> tuple[Path, 
     if config_path(path).exists() and not force_config:
         raise TrackerError(f"{config_path(path)} already exists. Pass --force to overwrite it.")
     if path.suffix.lower() == ".csv":
-        path.write_text(",".join(TEMPLATE_HEADERS) + "\n", encoding="utf-8")
+        path.write_text(",".join(headers) + "\n", encoding="utf-8")
         target, _, _ = init(path, force=True)
         return path, target
     wb = openpyxl.Workbook()
     ws = wb.active
-    ws.title = "Applications"
-    ws.append(TEMPLATE_HEADERS)
+    ws.title = t["sheet"]
+    ws.append(headers)
     for c, width in enumerate(TEMPLATE_WIDTHS, 1):
         ws.column_dimensions[get_column_letter(c)].width = width
         cell = ws.cell(1, c)
         cell.font = Font(bold=True)
         cell.fill = PatternFill("solid", fgColor="E8E8E8")
     ws.freeze_panes = "A2"
-    last = get_column_letter(len(TEMPLATE_HEADERS))
+    last = get_column_letter(len(headers))
     ws.auto_filter.ref = f"A1:{last}1"
-    col = {h: get_column_letter(i) for i, h in enumerate(TEMPLATE_HEADERS, 1)}
-    for header, options in (("Status", TEMPLATE_STATUSES), ("Furthest stage", ["Screening", "Interview", "Offer"]),
-                            ("Priority", ["High", "Medium", "Low"])):
+    # columns by their English name, whatever the language of the headers
+    col = {h: get_column_letter(i[h] + 1) for h in TEMPLATE_HEADERS}
+    for header, options in (("Status", t["statuses"]), ("Furthest stage", t["stages"]),
+                            ("Priority", t["priorities"])):
         dv = DataValidation(type="list", formula1=_q(",".join(options)), allow_blank=True)
         dv.add(f"{col[header]}2:{col[header]}500")
         ws.add_data_validation(dv)
-    s = wb.create_sheet("Summary")
-    rows = [("Applications", f"=COUNTA(Applications!{col['Company']}2:{col['Company']}500)"),
-            ("Submitted", f"=COUNT(Applications!{col['Applied on']}2:{col['Applied on']}500)"),
-            ("Waiting", f'=COUNTIF(Applications!{col["Status"]}2:{col["Status"]}500,"Applied")'),
-            ("Reached an interview", f'=COUNTIF(Applications!{col["Furthest stage"]}2:'
-                                     f'{col["Furthest stage"]}500,"Interview")'
-                                     f'+COUNTIF(Applications!{col["Furthest stage"]}2:'
-                                     f'{col["Furthest stage"]}500,"Offer")')]
+    s = wb.create_sheet(t["summary"])
+    sh = "'" + t["sheet"].replace("'", "''") + "'"   # a sheet name in a formula
+    applied, stages = t["statuses"][1], t["stages"]
+    labels = t["summary_rows"]
+    rows = [(labels[0], f"=COUNTA({sh}!{col['Company']}2:{col['Company']}500)"),
+            (labels[1], f"=COUNT({sh}!{col['Applied on']}2:{col['Applied on']}500)"),
+            (labels[2], f'=COUNTIF({sh}!{col["Status"]}2:{col["Status"]}500,"{applied}")'),
+            (labels[3], f'=COUNTIF({sh}!{col["Furthest stage"]}2:{col["Furthest stage"]}500,"{stages[1]}")'
+                        f'+COUNTIF({sh}!{col["Furthest stage"]}2:{col["Furthest stage"]}500,"{stages[2]}")')]
     for r, (label, formula) in enumerate(rows, 1):
         s.cell(r, 1, label).font = Font(bold=True)
         s.cell(r, 2, formula)
@@ -593,6 +628,8 @@ def cli(argv: list[str]) -> int:
     p_new = sub.add_parser("new", help="create an empty tracker (.xlsx or .csv) and its config")
     p_new.add_argument("tracker")
     p_new.add_argument("--force", action="store_true", help="overwrite an existing config")
+    p_new.add_argument("--lang", choices=sorted(TEMPLATES), default="en",
+                       help="language of the headers and statuses (default: en)")
     sub.add_parser("example", help="print a config with every key explained")
     p_auth = sub.add_parser("auth", help="sign in to Google once, for trackers in Google Sheets")
     p_auth.add_argument("provider", choices=["google"])
@@ -609,7 +646,7 @@ def cli(argv: list[str]) -> int:
                                    write=not args.print_only)
             print(text if args.print_only else report(g, target) + _next(_target(args.tracker)))
         elif args.cmd == "new":
-            book, cfg = new_tracker(args.tracker, force_config=args.force)
+            book, cfg = new_tracker(args.tracker, force_config=args.force, lang=args.lang)
             print(f"Created {book}\nand its config {cfg}" + _next(str(book)))
         elif args.cmd == "example":
             print(example_config())

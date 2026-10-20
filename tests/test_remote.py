@@ -57,6 +57,7 @@ class Sheets:
     def __call__(self, method, url, body):
         if method == "POST" and url == gsheets.API:          # a new spreadsheet
             self.created += 1
+            self.last_created = body
             sid = f"new{self.created:04d}abcd"
             row = body["sheets"][0]["data"][0]["rowData"][0]["values"]
             headers = [v["userEnteredValue"]["stringValue"] for v in row]
@@ -121,7 +122,7 @@ def live(tmp_path, monkeypatch):
         return r.json()
 
     def sign_in(who, client, action="pick", sheet="sheetALICE01", redirect="http://127.0.0.1:9/cb",
-                before_submit=None):
+                before_submit=None, lang=None):
         verifier = secrets.token_urlsafe(48)
         challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
         r = http.get("/authorize", params={
@@ -145,7 +146,8 @@ def live(tmp_path, monkeypatch):
         p = re.search(r'name=p value="([^"]+)"', page.text).group(1)
         if before_submit:
             before_submit(p)
-        r = http.post("/consent", data={"p": p, "action": action, "sheet_id": sheet})
+        form = {"p": p, "action": action, "sheet_id": sheet, **({"lang": lang} if lang else {})}
+        r = http.post("/consent", data=form)
         return page, (r, verifier)
 
     def tokens(client, r, verifier, redirect="http://127.0.0.1:9/cb"):
@@ -419,3 +421,27 @@ def test_id_token_audience_and_verified_email_exactly():
         google.identity(wc, {"id_token": id_token(ALICE, aud="xweb-client-other")})
     with pytest.raises(Exception, match="e-mail"):
         google.identity(wc, {"id_token": id_token({"sub": "9", "email": "a@b.c", "email_verified": "false"})})
+
+
+def test_a_new_sheet_in_russian(live):
+    client = live.register()
+    page, (r, verifier) = live.sign_in(BOB, client, action="create", lang="ru")
+    assert 'name=lang' in page.text and "Русский" in page.text
+    body = live.sheets.last_created
+    assert body["properties"]["title"] == "Трекер откликов"
+    headers = [v["userEnteredValue"]["stringValue"] for v in body["sheets"][0]["data"][0]["rowData"][0]["values"]]
+    assert headers[:3] == ["№", "Компания", "Роль"] and "Статус" in headers
+    live.tokens(client, r, verifier)
+
+
+def test_browser_language_picks_the_new_sheet_language():
+    from starlette.requests import Request
+
+    from tracker_mcp.remote.app import _browser_lang
+
+    def req(value):
+        return Request({"type": "http", "headers": [(b"accept-language", value.encode())]})
+    assert _browser_lang(req("ru-RU,ru;q=0.9,en;q=0.8")) == "ru"
+    assert _browser_lang(req("en-GB,ru;q=0.5")) == "en"
+    assert _browser_lang(Request({"type": "http", "headers": []})) == "en"
+

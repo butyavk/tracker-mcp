@@ -39,7 +39,8 @@ Start menu often do not see the shell's PATH.
 ## 3. The tracker
 
 - **None yet:** `uvx tracker-mcp new <path>.xlsx` creates one with dropdowns, a filter, a
-  summary sheet and its config.
+  summary sheet and its config. Add `--lang ru` if the user speaks Russian: the headers
+  and statuses are then in Russian. tracker-mcp understands either.
 - **Excel or CSV:** `uvx tracker-mcp init <path>` writes `<name>.tracker-mcp.toml` next to
   the tracker (it never touches the tracker) and lists what to check. Then
   `uvx tracker-mcp --check --tracker <path>` shows the mapping. Show it to the user and

@@ -47,6 +47,12 @@ from .storage import Storage, token_hash
 CONFIG_NAME = "tracker.tracker-mcp.toml"
 # The sign-in pages: no framing, no plugins, not cached; the referrer keeps only the
 # origin (an API key restricted to this site needs it).
+def _browser_lang(request: Request) -> str:
+    """The language for a new tracker sheet: Russian if the browser prefers it."""
+    first = request.headers.get("accept-language", "").split(",")[0].strip().lower()
+    return "ru" if first.startswith("ru") else "en"
+
+
 SECURITY_HEADERS = {"Cache-Control": "no-store", "X-Frame-Options": "DENY", "Referrer-Policy": "strict-origin",
                     "Content-Security-Policy": "frame-ancestors 'none'; object-src 'none'; base-uri 'none'",
                     "X-Content-Type-Options": "nosniff"}
@@ -222,9 +228,9 @@ class Remote:
         pending = self._consent_pending(p, request)
         if not pending:
             return self._expired()
-        return await anyio.to_thread.run_sync(self._consent_page, p, pending)
+        return await anyio.to_thread.run_sync(self._consent_page, p, pending, _browser_lang(request))
 
-    def _consent_page(self, p: str, pending: dict[str, Any]) -> Response:
+    def _consent_page(self, p: str, pending: dict[str, Any], lang: str = "en") -> Response:
         user = self.storage.user(pending["sub"]) or {}
         title = None
         if user.get("sheet"):
@@ -235,7 +241,8 @@ class Remote:
         return HTMLResponse(pages.consent(pending=p, client_name=pending.get("client_name"),
                                           redirect_uri=pending["redirect_uri"], email=pending["email"],
                                           sheet_title=title,
-                                          picker=bool(self.settings.picker_key and self.settings.app_id)),
+                                          picker=bool(self.settings.picker_key and self.settings.app_id),
+                                          lang=lang),
                             headers=SECURITY_HEADERS)
 
     async def picker_token(self, request: Request) -> Response:
@@ -280,7 +287,8 @@ class Remote:
         try:
             call = google.transport_for(self.google_auth(sub, user))
             if action == "create":
-                user["sheet"] = google.create_tracker_sheet(call)
+                lang = form.get("lang", "en")
+                user["sheet"] = google.create_tracker_sheet(call, lang if lang in ("en", "ru") else "en")
             elif action == "pick":
                 sid = form.get("sheet_id", "").strip()
                 if not re.fullmatch(r"[A-Za-z0-9_-]{8,128}", sid):

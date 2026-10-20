@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.1 — 2026-10-20
+
+Added
+- A Russian template: `tracker-mcp new <file> --lang ru` makes the tracker with Russian
+  headers, statuses, sheet names and summary; the config it writes uses Russian follow-up
+  log lines and dates. On a remote server the consent page offers English or Russian for
+  a new sheet, preselected from the browser's language.
+- The Russian guide shows how to have Claude's Google Sheets connector make the same
+  tracker, for trying it without installing anything.
+
 ## 0.5.0 — 2026-10-20
 
 Added

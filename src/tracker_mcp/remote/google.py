@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..gsheets import API, TOKEN_URI, GoogleAuth, Transport, _post_form, http_transport
-from ..scaffold import TEMPLATE_HEADERS, TEMPLATE_STATUSES
+from ..scaffold import TEMPLATE_HEADERS, template
 from ..stores import TrackerError
 
 AUTH_URI = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -94,13 +94,15 @@ def transport_for(auth: UserGoogleAuth) -> Transport:
     return http_transport(auth)
 
 
-def create_tracker_sheet(call: Transport, title: str = "Job applications") -> str:
+def create_tracker_sheet(call: Transport, lang: str = "en") -> str:
     """A new spreadsheet in the user's Drive with the `new` template's headers and a
-    status dropdown; returns its id. drive.file covers files the app creates."""
+    status dropdown, in English or Russian; returns its id. drive.file covers files the
+    app creates."""
+    t = template(lang)
     headers = [{"userEnteredValue": {"stringValue": h}, "userEnteredFormat": {"textFormat": {"bold": True}}}
-               for h in TEMPLATE_HEADERS]
-    body = {"properties": {"title": title},
-            "sheets": [{"properties": {"title": "Applications", "gridProperties": {"frozenRowCount": 1}},
+               for h in t["headers"]]
+    body = {"properties": {"title": t["title"]},
+            "sheets": [{"properties": {"title": t["sheet"], "gridProperties": {"frozenRowCount": 1}},
                         "data": [{"startRow": 0, "startColumn": 0, "rowData": [{"values": headers}]}]}]}
     made = call("POST", API, body)
     sid, sheet = made["spreadsheetId"], made["sheets"][0]["properties"]["sheetId"]
@@ -109,7 +111,7 @@ def create_tracker_sheet(call: Transport, title: str = "Job applications") -> st
         "range": {"sheetId": sheet, "startRowIndex": 1, "endRowIndex": 1000,
                   "startColumnIndex": status_col, "endColumnIndex": status_col + 1},
         "rule": {"condition": {"type": "ONE_OF_LIST",
-                               "values": [{"userEnteredValue": s} for s in TEMPLATE_STATUSES]},
+                               "values": [{"userEnteredValue": s} for s in t["statuses"]]},
                  "showCustomUi": True, "strict": False}}}]})
     return sid
 
