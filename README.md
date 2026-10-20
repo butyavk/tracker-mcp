@@ -7,6 +7,8 @@ CSV or Google Sheets. Connect it to Claude (or any MCP client), and the assistan
 keeps the tracker for you: it answers from it, reminds you what is due, and records
 what happened, with your yes for every change.
 
+По-русски: [как подключить](https://butyavk.github.io/tracker-mcp/ru.html).
+
 > **You:** Which follow-ups are due this week?
 >
 > **Claude:** Three. Acme (applied 17 Sep): nudge Sarah Kim on LinkedIn, overdue by
