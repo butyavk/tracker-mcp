@@ -254,14 +254,15 @@ CSV files.
 git clone https://github.com/butyavk/tracker-mcp && cd tracker-mcp
 ./deploy/cloudrun.sh --project <project-id> --dry-run     # prints the addresses to register
 ./deploy/cloudrun.sh --project <project-id> --client-id <web client id> \
-    --allow you@gmail.com,friend@gmail.com --picker-key <API key>
+    --allow you@gmail.com,friend@gmail.com
 ```
 
 Before that, in the project: billing on; an OAuth client of type **Web application**
-with the redirect URI and JavaScript origin the dry run prints; the **Google Picker
-API** enabled and an API key restricted to it and to your server's address. The script
-creates a private Cloud Storage bucket for the server's data, an encryption key in
-Secret Manager, asks for the client's secret without showing it, and deploys one
+with the redirect URI and JavaScript origin the dry run prints, and `openid` and
+`email` added to its Data Access scopes next to `drive.file`. The script creates a
+private Cloud Storage bucket for the server's data, an encryption key in Secret Manager,
+the file picker's API key (Picker API only, your server's address only; or pass yours
+with `--picker-key`), asks for the client's secret without showing it, and deploys one
 instance. At personal use it fits Cloud Run's free tier; the bucket costs cents.
 
 Clients may register only with Claude's connector callback (on claude.ai or

@@ -4,11 +4,12 @@
 #
 #   git clone https://github.com/butyavk/tracker-mcp && cd tracker-mcp
 #   ./deploy/cloudrun.sh --project <project-id> --client-id <web client id> \
-#       --allow you@gmail.com,friend@gmail.com [--picker-key <API key>] [--region europe-west1]
+#       --allow you@gmail.com,friend@gmail.com [--region europe-west1]
 #
 # Before: billing enabled on the project; an OAuth client of type "Web application" with
 # the redirect URI this script prints (run it once with --dry-run to see it). The client
 # secret is asked for here, without echo, and kept in Secret Manager; it is never printed.
+# The file picker's API key is made here too (or pass your own with --picker-key).
 set -euo pipefail
 
 REGION=europe-west1 SERVICE=tracker-mcp PICKER_KEY="" DRY=0 PROJECT="" CLIENT_ID="" ALLOW="" NEW_SECRET=0
@@ -82,10 +83,28 @@ for s in tracker-mcp-secret-key tracker-mcp-google-client-secret; do
     --role roles/secretmanager.secretAccessor >/dev/null
 done
 
+# The Drive file picker needs a browser API key. Without --picker-key the script makes one
+# (or reuses it), limited to the Picker API and to this server's pages. It only names the
+# app to Google; every browser that opens the picker sees it anyway.
+if [ -z "$PICKER_KEY" ]; then
+  gcloud services enable apikeys.googleapis.com >/dev/null
+  key_name() { gcloud services api-keys list --filter='displayName="tracker-mcp picker"' \
+    --format='value(name)' --limit=1; }
+  KEY=$(key_name)
+  if [ -z "$KEY" ]; then
+    out=$(gcloud services api-keys create --display-name="tracker-mcp picker" \
+      --api-target=service=picker.googleapis.com --allowed-referrers="$BASE/*" 2>&1) \
+      || { echo "$out" >&2; exit 1; }
+    KEY=$(key_name)
+    echo "Picker API key created (tracker-mcp picker: Picker API only, $BASE only)."
+  fi
+  PICKER_KEY=$(gcloud services api-keys get-key-string "$KEY" --format='value(keyString)')
+fi
+
 # "^|^" makes | the separator, so the e-mail list keeps its commas
 ENV="^|^TRACKER_MCP_BASE_URL=$BASE|TRACKER_MCP_DATA_DIR=/data|GOOGLE_WEB_CLIENT_ID=$CLIENT_ID|GOOGLE_APP_ID=$NUMBER"
 ENV="$ENV|TRACKER_MCP_ALLOWED_EMAILS=$ALLOW"
-[ -n "$PICKER_KEY" ] && ENV="$ENV|GOOGLE_PICKER_API_KEY=$PICKER_KEY"
+ENV="$ENV|GOOGLE_PICKER_API_KEY=$PICKER_KEY"
 
 echo "Building and deploying (3–5 minutes)…"
 gcloud run deploy "$SERVICE" --source . --region "$REGION" --service-account "$SA" \
