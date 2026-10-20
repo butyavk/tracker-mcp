@@ -21,7 +21,10 @@ Humans: the same in Russian is at https://butyavk.github.io/tracker-mcp/ru.html.
 2. Where is the tracker: a path to an .xlsx or .csv file, a Google Sheets link, or none
    yet (then where to create one)?
 3. Do they need it in claude.ai in the browser or on the phone? That needs their own
-   server (section 5). Everything else runs on their computer.
+   server (section 5). Everything else runs on their computer. If they only want to try
+   it there without running anything, tracker-mcp is not needed: claude.ai's Google
+   Sheets connector and a project instruction will do (the Russian page has the text);
+   say what they would miss (rules in code, enforced confirmation, backups and undo).
 
 ## 2. uv
 

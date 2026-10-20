@@ -29,8 +29,9 @@ Hooli via a referral today", "close everything that hasn't answered in 45 days".
 ### Why a server? Can't Claude just do this?
 
 It can, if you set it up. Claude reads a spreadsheet you attach, and with access to your
-files (Claude Code, or Claude working in a folder on your computer) or the Google Drive
-connector it can edit the tracker by writing a little code. Give it good instructions
+files (Claude Code, or Claude working in a folder on your computer) it can edit the
+tracker by writing a little code, and in claude.ai the Google Sheets connector lets it
+edit a Google Sheet directly. Give it good instructions
 (where the tracker is, what each column means, how follow-ups are counted, "back up and
 ask me before every write") and it works: tracker-mcp grew out of exactly that setup. The
 difference is where the rules live: in instructions the model reads and follows, or in a
