@@ -47,6 +47,10 @@ def consent(*, pending: str, client_name: str | None, redirect_uri: str, email: 
     who = html.escape(client_name or "An MCP client")
     host = html.escape(urlparse(redirect_uri).netloc or redirect_uri)
     p = html.escape(pending)
+    loop = (urlparse(redirect_uri).hostname or "") in ("localhost", "127.0.0.1", "::1", "[::1]")
+    local = ("<p><b>That is a program on this computer</b> (Claude Code, the MCP Inspector). Any program on "
+             "it could claim that name: continue only if you just started the connection there.</p>"
+             if loop else "")
     if sheet_title:
         tracker = f"<p>Tracker: <b>{html.escape(sheet_title)}</b></p>"
         cont = "<button class=primary name=action value=continue>Continue</button>"
@@ -58,7 +62,7 @@ def consent(*, pending: str, client_name: str | None, redirect_uri: str, email: 
 <h1>Connect your job tracker</h1>
 <p><b>{who}</b> wants to read and update your job tracker as <b>{html.escape(email)}</b>.</p>
 <p>It will send you back to <b>{host}</b>. Continue only if you started this yourself, from an app
-at that address.</p>
+at that address.</p>{local}
 <p class=muted>Every change it makes still shows you a preview and needs your yes.</p>
 {tracker}
 <form method=post action=consent id=f>
