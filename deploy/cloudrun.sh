@@ -40,6 +40,11 @@ echo "Enabling APIs (a minute the first time)…"
 gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com \
   secretmanager.googleapis.com storage.googleapis.com sheets.googleapis.com picker.googleapis.com >/dev/null
 
+# source deploys build with the Compute Engine default service account (Cloud Build's
+# default since 2024); it needs the Cloud Run Builder role
+gcloud projects add-iam-policy-binding "$PROJECT" --condition=None \
+  --member "serviceAccount:${NUMBER}-compute@developer.gserviceaccount.com" --role roles/run.builder >/dev/null
+
 BUCKET="${PROJECT}-tracker-mcp-data"
 if ! gcloud storage buckets describe "gs://$BUCKET" >/dev/null 2>&1; then
   gcloud storage buckets create "gs://$BUCKET" --location="$REGION" --uniform-bucket-level-access \
