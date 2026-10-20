@@ -7,6 +7,8 @@ CSV or Google Sheets. Connect it to Claude (or any MCP client), and the assistan
 keeps the tracker for you: it answers from it, reminds you what is due, and records
 what happened, with your yes for every change.
 
+По-русски: [как подключить](https://butyavk.github.io/tracker-mcp/ru.html).
+
 > **You:** Which follow-ups are due this week?
 >
 > **Claude:** Three. Acme (applied 17 Sep): nudge Sarah Kim on LinkedIn, overdue by
@@ -82,7 +84,18 @@ instructions you wrote, what you gain is reliability, not new features.
 
 ## Quick start
 
-You need [uv](https://docs.astral.sh/uv/getting-started/installation/), which also
+**Let an agent do it.** Paste this into Claude Code or Codex; it installs what is
+needed, asks where your tracker is, connects it and checks the result:
+
+```text
+Install tracker-mcp for me: an MCP server that lets AI keep my job-application spreadsheet.
+Read the instructions for agents and follow them:
+https://raw.githubusercontent.com/butyavk/tracker-mcp/main/docs/agent-setup.md
+First ask me where my tracker is and which app to connect it to.
+Don't edit the tracker yourself, and check at the end that it works.
+```
+
+Or by hand. You need [uv](https://docs.astral.sh/uv/getting-started/installation/), which also
 fetches Python for you. Pick your client:
 
 **Claude Desktop, the easy way:** download `tracker-mcp-<version>.mcpb` from the
