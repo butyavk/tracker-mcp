@@ -67,7 +67,14 @@
   Details: <a href="privacy.html">privacy policy</a>.</p>
 
   <h2>Get started</h2>
-  <p>You need <a href="https://docs.astral.sh/uv/getting-started/installation/">uv</a>. Then pick your client:</p>
+  <p><strong>Let an agent do it.</strong> Paste this into Claude Code or Codex; it installs what is
+  needed, asks where your tracker is, connects it and checks the result:</p>
+  <pre><code>Install tracker-mcp for me: an MCP server that lets AI keep my job-application spreadsheet.
+Read the instructions for agents and follow them:
+https://raw.githubusercontent.com/butyavk/tracker-mcp/main/docs/agent-setup.md
+First ask me where my tracker is and which app to connect it to.
+Don't edit the tracker yourself, and check at the end that it works.</code></pre>
+  <p>Or by hand. You need <a href="https://docs.astral.sh/uv/getting-started/installation/">uv</a>. Then pick your client:</p>
   <ul>
     <li><strong>Claude Code:</strong> <code>/plugin install tracker-mcp --marketplace butyavk/tracker-mcp</code></li>
     <li><strong>Claude Desktop:</strong> download <code>tracker-mcp-&lt;version&gt;.mcpb</code> from the
