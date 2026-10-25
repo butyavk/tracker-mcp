@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.5.2 — 2026-10-25
+
+Changed
+- Tool descriptions are clearer, so that a model picks the right tool the first time.
+  Each write tool now says how the user's yes works. It is the client's dialog, or a
+  dry run and then `confirm`. It also says that a changed tracker refuses the write and that
+  the write can be undone. `mark_applied`, `set_status`, `log_followup`, `summary`,
+  `recent_writes`, `list_applications` and `get_application` now say what they change
+  or return. They also say when a neighbouring tool fits better. The parameters of
+  `add_application` and the note of `mark_applied` have descriptions now.
+
 ## 0.5.1 — 2026-10-20
 
 Added

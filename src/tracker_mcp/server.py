@@ -78,11 +78,25 @@ mcp = MCPServer(
     website_url="https://github.com/butyavk/tracker-mcp")
 
 
+# Appended to every write tool's description, so the confirmation flow is in front of
+# the model even in a client that does not pass the server's instructions on.
+WRITE_NOTE = ("The tool writes only with the user's yes. The client may ask in its own confirmation "
+              "dialog. Otherwise call with dry_run=true, show the preview to the user, and after they "
+              "agree in a new message repeat the same call with confirm=<token>. The write is refused "
+              "if the tracker changed since expected_version.")
+UNDO_NOTE = "A backup is taken first, and undo_last_write reverts the write."
+
+
 def tool(title: str, annotations: ToolAnnotations):
-    """mcp.tool with a title and the docstring dedented into the description."""
+    """mcp.tool with a title and the docstring dedented into the description; a write
+    tool (one that takes `confirm`) also gets the confirmation note."""
     def register(fn):
-        return mcp.tool(title=title, description=inspect.cleandoc(fn.__doc__ or ""),
-                        annotations=annotations)(fn)
+        text = inspect.cleandoc(fn.__doc__ or "")
+        if "confirm" in inspect.signature(fn).parameters:
+            text += "\n\n" + WRITE_NOTE
+            if fn.__name__ != "undo_last_write":
+                text += " " + UNDO_NOTE
+        return mcp.tool(title=title, description=text, annotations=annotations)(fn)
     return register
 
 READ = ToolAnnotations(read_only_hint=True, open_world_hint=False)
@@ -356,7 +370,11 @@ def list_applications(
     open_only: Annotated[bool, Field(description="Hide closed statuses (rejected, withdrawn, ...)")] = False,
     limit: Annotated[int, Field(ge=1, le=1000, description="At most this many rows")] = 100,
 ) -> dict[str, Any]:
-    """List applications in brief: row, company, role, status, submit and follow-up dates."""
+    """Browse the job applications in the tracker, one line each: row, company, role,
+    status, submit and follow-up dates. Filter by status, by company or role text, by
+    submit dates, or show open ones only. For every column of one row use
+    get_application. For counts use summary or funnel, and for what is due use
+    followups_due."""
     return call("list_applications", status, query, applied_since, applied_until, open_only, limit)
 
 
@@ -365,7 +383,10 @@ def get_application(
     query: Annotated[str | None, Field(description="Company or role text, e.g. 'Acme'")] = None,
     row: Annotated[int | None, Field(description="Exact sheet row number")] = None,
 ) -> dict[str, Any]:
-    """Everything recorded for an application: all columns, notes, follow-up log."""
+    """Everything recorded for one job application: every column, the notes and the
+    follow-up log. Find it by `row`, or by company or role text in `query`. A text
+    that matches several rows returns all of them. Use it before a write to show the
+    user the current values. To browse many rows in brief, use list_applications."""
     return call("get_application", query, row)
 
 
@@ -394,8 +415,11 @@ def summary(
     since: Annotated[date | None, Field(description="Period start for the submitted cohort")] = None,
     until: Annotated[date | None, Field(description="Period end for the submitted cohort")] = None,
 ) -> dict[str, Any]:
-    """Counts by status and by month. With since/until: how many were submitted in that
-    period and where they stand now."""
+    """Counts the job applications in the tracker: per status, submitted and not yet,
+    and submissions per month. With since/until, it shows the applications submitted
+    in that period and where they stand now. For reply and interview rates use funnel,
+    and for how fast replies come use reply_times. For what to do next, use
+    followups_due and stale_applications."""
     return call("summary", since, until)
 
 
@@ -461,7 +485,11 @@ def match_emails(
 def recent_writes(
     limit: Annotated[int, Field(ge=1, le=200, description="At most this many entries")] = 10,
 ) -> dict[str, Any]:
-    """The audit log of this server's writes, newest first."""
+    """The audit log of this server's writes to the tracker, newest first. Each entry
+    has the time, the tool, the row, the backup file, and every changed cell with its
+    old and new value. Use it to answer "what did you change?" or to check that a write
+    landed. It also shows what undo_last_write would revert. Edits made by hand in
+    Excel or Sheets are not in it."""
     return call("recent_writes", limit)
 
 
@@ -482,13 +510,15 @@ def _ask_add(ctx: Context, company: str, role: str, link: str | None = None, not
 def add_application(
     ctx: Context,
     approval: Annotated[Approval, Resolve(_ask_add)],
-    company: str,
-    role: str,
+    company: Annotated[str, Field(description="Company name")],
+    role: Annotated[str, Field(description="Job title, as in the posting")],
     link: Annotated[str | None, Field(description="Application URL")] = None,
-    notes: str | None = None,
+    notes: Annotated[str | None, Field(description="Text for the notes column")] = None,
     extra: Annotated[dict[str, str] | None, Field(
         description="Other columns: a field name from describe_tracker or an exact header text -> value")] = None,
-    allow_duplicate: bool = False,
+    allow_duplicate: Annotated[bool, Field(
+        description="Add it even though the same company+role or link is already in the tracker (a second "
+                    "application on purpose)")] = False,
     expected_version: Version = None,
     dry_run: DryRun = False,
     confirm: Confirm = None,
@@ -516,12 +546,19 @@ def mark_applied(
     channel: Annotated[str | None, Field(description="How it was sent, e.g. 'Ashby (direct form)'")] = None,
     followup_on: Annotated[date | None, Field(
         description="Default: from the follow-up rule (describe_tracker)")] = None,
-    note: str | None = None,
+    note: Annotated[str | None, Field(description="Appended to the notes column")] = None,
     expected_version: Version = None,
     dry_run: DryRun = False,
     confirm: Confirm = None,
 ) -> dict[str, Any]:
-    """Record a submission: applied flag, date, channel, the applied status, follow-up 1 date."""
+    """Record that the user submitted an application that is already a row in the
+    tracker. Add a new one with add_application first. The write sets the applied flag,
+    the submit date, the channel and the applied status, unless the row already has
+    another status. It also sets the first follow-up date by the follow-up rule and
+    adds a line to the follow-up log. An existing follow-up date is kept unless
+    followup_on is given. A row already marked as applied is refused; correct its date
+    with edit_application. The tool warns when the same company got another application
+    within a few weeks. Replies and closing go through set_status."""
     return finish(ctx, "mark_applied", (row,),
                   dict(applied_on=applied_on, channel=channel, followup_on=followup_on, note=note),
                   approval, dry_run=dry_run, confirm=confirm)
@@ -548,8 +585,14 @@ def set_status(
     dry_run: DryRun = False,
     confirm: Confirm = None,
 ) -> dict[str, Any]:
-    """Change the status. A closed status (see describe_tracker) also cancels a pending
-    follow-up date; the first reply (a rejection or any stage) fills the reply date."""
+    """Change the status of one job application when the company replies or the
+    application ends. It covers a rejection, a screening call, an interview, an offer
+    or a withdrawal. `status` must be a value from the tracker's status dropdown;
+    describe_tracker lists them and which are closed. The response and the note are
+    appended with a date. The furthest-stage column moves forward, never back. The
+    first reply fills the reply date with `on`, and a closed status clears a pending
+    follow-up date. For a new submission use mark_applied, and for many silent
+    applications at once use close_stale. To fix another cell, use edit_application."""
     return finish(ctx, "set_status", (row, status), dict(response=response, note=note, on=on),
                   approval, dry_run=dry_run, confirm=confirm)
 
@@ -573,7 +616,13 @@ def log_followup(
     dry_run: DryRun = False,
     confirm: Confirm = None,
 ) -> dict[str, Any]:
-    """Record a sent follow-up and schedule the next one."""
+    """Record a follow-up that the user actually sent for one job application. The tool
+    appends `text` to the follow-up log and replaces the contact if one is given. It
+    also sets the next follow-up date: next_on, or the follow-up rule counted from
+    today. final=true clears the date, so there are no more follow-ups while the status
+    stays open. Use reschedule_followup when nothing was sent and only the date moves.
+    Use set_status when the company replied or the application closes. followups_due
+    lists what is due."""
     return finish(ctx, "log_followup", (row, text), dict(next_on=next_on, final=final, contact=contact),
                   approval, dry_run=dry_run, confirm=confirm)
 

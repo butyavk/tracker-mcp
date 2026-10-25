@@ -173,6 +173,12 @@ def test_resources_and_prompts(t):
             assert '"company": "Acme"' in res.contents[0].text
             tools = (await c.list_tools()).tools
             assert all(x.title for x in tools) and not any("\n    " in (x.description or "") for x in tools)
+            # every write tool says how the yes works; read tools do not carry it
+            for x in tools:
+                takes_confirm = "confirm" in x.input_schema["properties"]
+                assert ("confirm=<token>" in x.description) == takes_confirm, x.name
+                assert ("undo_last_write reverts" in x.description) == (
+                    takes_confirm and x.name != "undo_last_write"), x.name
 
     anyio.run(go)
 
