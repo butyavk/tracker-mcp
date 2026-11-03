@@ -735,47 +735,96 @@ class Tracker:
                            f"application per company every {n} days (rules.same_company_days).")
         return out
 
+    # At most this many rows in one add_applications or set_statuses call: the preview
+    # must stay short enough for the user to read before saying yes.
+    BATCH_LIMIT = 50
+
+    def _add_row(self, ws: Worksheet, lay: Layout, company: str, role: str, link: str | None,
+                 notes: str | None, extra: dict[str, str] | None, allow_duplicate: bool,
+                 changes: list[Change]) -> tuple[int, list[str]]:
+        """Append one application after the last row and move `lay.last_row` to it, so
+        the next row of a batch goes below and sees this one as a duplicate."""
+        cfg = self.cfg
+        company, role = (company or "").strip(), (role or "").strip()
+        if not company or not role:
+            raise TrackerError("company and role are required")
+        extra_cols = self._resolve_extra(lay, extra or {})
+        if not allow_duplicate:
+            for r in lay.rows():
+                same = (str(ws.cell(r, lay.cols["company"]).value or "").strip().casefold() == company.casefold()
+                        and str(ws.cell(r, lay.cols["role"]).value or "").strip().casefold() == role.casefold())
+                same_link = (link and cfg.has("link")
+                             and str(ws.cell(r, lay.cols["link"]).value or "").strip() == link.strip())
+                if same or same_link:
+                    raise TrackerError(f"Row {r} already has this application. "
+                                       "Pass allow_duplicate=true to add anyway.")
+        r = lay.last_row + 1
+        if lay.last_row > lay.header_row:  # an empty tracker has no data row to copy from
+            self._copy_row_style(ws, lay, src=lay.last_row, dst=r)
+        values: dict[str, Any] = {"company": company, "role": role, "link": link, "notes": notes}
+        if cfg.has("num"):
+            nums = [int(v) for x in lay.rows()
+                    if str(v := ws.cell(x, lay.cols["num"]).value or "").strip().isdigit()]
+            values = {"num": max(nums, default=0) + 1, **values}
+        values["status"] = cfg.statuses.not_applied
+        if cfg.has("applied"):
+            values["applied"] = self._flag(ws, lay, False)
+        for key, val in values.items():
+            if val not in (None, "") and cfg.has(key):
+                self._set(ws, lay, r, key, val, changes)
+        for col, val in extra_cols.items():
+            self._set_col(ws, lay, r, col, val, changes)
+        lay.last_row = r
+        return r, self._company_warnings(ws, lay, company, self.today(), exclude=r)
+
     def add_application(self, company: str, role: str, *, link: str | None = None,
                         notes: str | None = None, extra: dict[str, str] | None = None,
                         allow_duplicate: bool = False, expected_version: str | None = None,
                         dry_run: bool = False) -> dict[str, Any]:
-        company, role = company.strip(), role.strip()
-        if not company or not role:
+        if not company.strip() or not role.strip():
             raise TrackerError("company and role are required")
-        cfg = self.cfg
 
         def mutate(wb: Workbook, ws: Worksheet, lay: Layout):
-            extra_cols = self._resolve_extra(lay, extra or {})
-            if not allow_duplicate:
-                for r in lay.rows():
-                    same = (str(ws.cell(r, lay.cols["company"]).value or "").strip().casefold() == company.casefold()
-                            and str(ws.cell(r, lay.cols["role"]).value or "").strip().casefold() == role.casefold())
-                    same_link = (link and cfg.has("link")
-                                 and str(ws.cell(r, lay.cols["link"]).value or "").strip() == link.strip())
-                    if same or same_link:
-                        raise TrackerError(f"Row {r} already has this application. "
-                                           "Pass allow_duplicate=true to add anyway.")
-            r = lay.last_row + 1
-            if lay.last_row > lay.header_row:  # an empty tracker has no data row to copy from
-                self._copy_row_style(ws, lay, src=lay.last_row, dst=r)
-            values: dict[str, Any] = {"company": company, "role": role, "link": link, "notes": notes}
-            if cfg.has("num"):
-                nums = [int(v) for x in lay.rows()
-                        if str(v := ws.cell(x, lay.cols["num"]).value or "").strip().isdigit()]
-                values = {"num": max(nums, default=0) + 1, **values}
-            values["status"] = cfg.statuses.not_applied
-            if cfg.has("applied"):
-                values["applied"] = self._flag(ws, lay, False)
             changes: list[Change] = []
-            for key, val in values.items():
-                if val not in (None, "") and cfg.has(key):
-                    self._set(ws, lay, r, key, val, changes)
-            for col, val in extra_cols.items():
-                self._set_col(ws, lay, r, col, val, changes)
-            layout_notes = self._grow_layout(wb, ws, lay, r)
-            return r, changes, layout_notes, self._company_warnings(ws, lay, company, self.today(), exclude=r)
+            r, warnings = self._add_row(ws, lay, company, role, link, notes, extra, allow_duplicate, changes)
+            return r, changes, self._grow_layout(wb, ws, lay, r), warnings
 
         return self._write("add_application", mutate, expected_version, dry_run)
+
+    def _batch(self, items: list[dict[str, Any]], what: str) -> list[dict[str, Any]]:
+        if not items:
+            raise TrackerError(f"No {what} given.")
+        if len(items) > self.BATCH_LIMIT:
+            raise TrackerError(f"{len(items)} {what} in one call; the limit is {self.BATCH_LIMIT}. "
+                               "Split them into several calls.")
+        return [dict(i) for i in items]
+
+    def add_applications(self, items: list[dict[str, Any]], *, expected_version: str | None = None,
+                         dry_run: bool = False) -> dict[str, Any]:
+        """Several new rows in one write: one preview, one backup, one undo step. Each item
+        takes the arguments of add_application. All or nothing: if one item is refused
+        (a duplicate, an unknown column), nothing is written and the error names it."""
+        items = self._batch(items, "applications")
+        for n, it in enumerate(items, 1):
+            if not str(it.get("company") or "").strip() or not str(it.get("role") or "").strip():
+                raise TrackerError(f"Item {n}: company and role are required.")
+
+        def mutate(wb: Workbook, ws: Worksheet, lay: Layout):
+            changes: list[Change] = []
+            rows: list[int] = []
+            warnings: list[str] = []
+            for n, it in enumerate(items, 1):
+                label = f"Item {n} ({str(it['company']).strip()} — {str(it['role']).strip()})"
+                try:
+                    r, warn = self._add_row(ws, lay, it["company"], it["role"], it.get("link"), it.get("notes"),
+                                            it.get("extra"), bool(it.get("allow_duplicate")), changes)
+                except TrackerError as e:
+                    raise TrackerError(f"{label}: {e} Nothing was written.") from e
+                rows.append(r)
+                warnings += [f"{label}: {w}" for w in warn]
+            return rows, changes, self._grow_layout(wb, ws, lay, rows[-1]), warnings
+
+        return self._write("add_applications", mutate, expected_version, dry_run)
 
     def mark_applied(self, row: int, *, applied_on: date | None = None, channel: str | None = None,
                      followup_on: date | None = None, note: str | None = None,
@@ -818,43 +867,82 @@ class Tracker:
                    dry_run: bool = False) -> dict[str, Any]:
         """`on`: when it happened (the e-mail's date), default today. It goes into the
         reply date when this is the application's first reply."""
-        cfg = self.cfg
         if on is not None and on > self.today():
             raise TrackerError(f"{on.isoformat()} is in the future; `on` is when the reply came.")
 
         def mutate(wb: Workbook, ws: Worksheet, lay: Layout):
-            self._check_row(ws, lay, row)
-            st = self._normalize_status(ws, lay, status)
-            if st == cfg.statuses.applied and not self._is_applied(self._record(ws, lay, row)):
-                raise TrackerError("For a new submission use mark_applied: it also sets "
-                                   "the date and the follow-up date.")
             changes: list[Change] = []
-            had_reply = self._furthest(self._record(ws, lay, row)) >= 0
-            self._set(ws, lay, row, "status", st, changes)
-            if cfg.has("reached"):  # the furthest stage only moves forward
-                cell = ws.cell(row, lay.cols["reached"]).value
-                new, old = self._stage(st), self._stage(cell)
-                known = old is not None or cell in (None, "")   # never overwrite a word we cannot read
-                if new is not None and known and (old is None or new > old):
-                    self._set(ws, lay, row, "reached", self._stage_word(ws, lay, new), changes)
-            # the first reply only: a row that had one already keeps an empty date for
-            # check_tracker to fill from what the row says, not today's date
-            if cfg.has("replied_on") and self._is_reply(st) and not had_reply:
-                if ws.cell(row, lay.cols["replied_on"]).value in (None, ""):
-                    self._set(ws, lay, row, "replied_on", on or self.today(), changes)
-            for key, text in (("response", response), ("notes", note)):
-                if text and cfg.has(key):
-                    self._set(ws, lay, row, key,
-                              self._append(ws.cell(row, lay.cols[key]).value, self._stamp(text, on)), changes)
-            if cfg.has("followup_on"):
-                fu = self._date(ws.cell(row, lay.cols["followup_on"]).value)
-                if st in self.closed and fu and fu >= self.today():
-                    self._set(ws, lay, row, "followup_on", cfg.values.no_date, changes)
-                    self._log(ws, lay, row,
-                              cfg.messages.followup_cancelled.format(date=self._fmt(fu), status=st), changes)
+            self._status_change(ws, lay, row, status, response, note, on, changes)
             return row, changes, []
 
         return self._write("set_status", mutate, expected_version, dry_run)
+
+    def _status_change(self, ws: Worksheet, lay: Layout, row: int, status: str, response: str | None,
+                       note: str | None, on: date | None, changes: list[Change]) -> None:
+        cfg = self.cfg
+        self._check_row(ws, lay, row)
+        st = self._normalize_status(ws, lay, status)
+        if st == cfg.statuses.applied and not self._is_applied(self._record(ws, lay, row)):
+            raise TrackerError("For a new submission use mark_applied: it also sets "
+                               "the date and the follow-up date.")
+        had_reply = self._furthest(self._record(ws, lay, row)) >= 0
+        self._set(ws, lay, row, "status", st, changes)
+        if cfg.has("reached"):  # the furthest stage only moves forward
+            cell = ws.cell(row, lay.cols["reached"]).value
+            new, old = self._stage(st), self._stage(cell)
+            known = old is not None or cell in (None, "")   # never overwrite a word we cannot read
+            if new is not None and known and (old is None or new > old):
+                self._set(ws, lay, row, "reached", self._stage_word(ws, lay, new), changes)
+        # the first reply only: a row that had one already keeps an empty date for
+        # check_tracker to fill from what the row says, not today's date
+        if cfg.has("replied_on") and self._is_reply(st) and not had_reply:
+            if ws.cell(row, lay.cols["replied_on"]).value in (None, ""):
+                self._set(ws, lay, row, "replied_on", on or self.today(), changes)
+        for key, text in (("response", response), ("notes", note)):
+            if text and cfg.has(key):
+                self._set(ws, lay, row, key,
+                          self._append(ws.cell(row, lay.cols[key]).value, self._stamp(text, on)), changes)
+        if cfg.has("followup_on"):
+            fu = self._date(ws.cell(row, lay.cols["followup_on"]).value)
+            if st in self.closed and fu and fu >= self.today():
+                self._set(ws, lay, row, "followup_on", cfg.values.no_date, changes)
+                self._log(ws, lay, row,
+                          cfg.messages.followup_cancelled.format(date=self._fmt(fu), status=st), changes)
+
+    def set_statuses(self, items: list[dict[str, Any]], *, expected_version: str | None = None,
+                     dry_run: bool = False) -> dict[str, Any]:
+        """Several status changes in one write: one preview, one backup, one undo step.
+        Each item takes the arguments of set_status (row, status, response, note, on) and
+        is applied exactly as set_status would apply it. All or nothing: if one row is
+        refused, nothing is written and the error names the row."""
+        items = self._batch(items, "status changes")
+        seen: set[int] = set()
+        for it in items:
+            row = it.get("row")
+            if not isinstance(row, int) or isinstance(row, bool):
+                raise TrackerError(f"Each item needs a row number; got {row!r}.")
+            if row in seen:
+                raise TrackerError(f"Row {row} appears twice; give one change per row.")
+            seen.add(row)
+            if not str(it.get("status") or "").strip():
+                raise TrackerError(f"Row {row}: status is required.")
+            on = it.get("on")
+            if isinstance(on, str):
+                on = it["on"] = date.fromisoformat(on)
+            if on is not None and on > self.today():
+                raise TrackerError(f"Row {row}: {on.isoformat()} is in the future; `on` is when the reply came.")
+
+        def mutate(wb: Workbook, ws: Worksheet, lay: Layout):
+            changes: list[Change] = []
+            for it in items:
+                try:
+                    self._status_change(ws, lay, it["row"], it["status"], it.get("response"), it.get("note"),
+                                        it.get("on"), changes)
+                except TrackerError as e:
+                    raise TrackerError(f"Row {it['row']}: {e} Nothing was written.") from e
+            return [it["row"] for it in items], changes, []
+
+        return self._write("set_statuses", mutate, expected_version, dry_run)
 
     def log_followup(self, row: int, text: str, *, next_on: date | None = None, final: bool = False,
                      contact: str | None = None, expected_version: str | None = None,

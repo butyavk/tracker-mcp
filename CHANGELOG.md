@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.6.0 — 2026-11-03
+
+Added
+- `add_applications`: several new rows in one write. Each item takes the arguments of
+  `add_application`, and the rows go in below each other in the given order. A
+  duplicate inside the batch is refused like a duplicate already in the tracker.
+- `set_statuses`: several status changes in one write, for example after a day of
+  replies. Each item is applied exactly as `set_status` applies it, and a row may
+  appear only once.
+- Both take up to 50 items. The user sees one preview of every row and answers once,
+  in the client's dialog or with one `confirm` token. The write is all or nothing: a
+  refused item stops the whole batch, and the error names it. One backup is taken, so
+  one `undo_last_write` reverts the whole batch.
+
+Changed
+- `check_tracker` takes reply dates from `set_statuses` writes too, as it does from
+  `set_status`.
+
 ## 0.5.2 — 2026-10-25
 
 Changed

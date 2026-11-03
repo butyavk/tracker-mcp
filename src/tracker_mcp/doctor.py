@@ -83,7 +83,8 @@ def reply_dates_from_audit(t: Tracker, labels: dict[int, str]) -> dict[int, date
     undos = [e for e in entries if e.get("tool") == "undo_last_write"]
     out: dict[int, date] = {}
     for e in entries:
-        if e.get("tool") != "set_status" or e.get("unverified") or any(undid(u, e) for u in undos):
+        if (e.get("tool") not in ("set_status", "set_statuses") or e.get("unverified")
+                or any(undid(u, e) for u in undos)):
             continue
         for ch in e.get("changes", []):
             row = int(ch.get("row", 0))

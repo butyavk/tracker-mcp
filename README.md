@@ -306,8 +306,10 @@ who sign in to it, so use one run by someone you trust.
 | `match_emails` | read | Which application each e-mail is about (confirmation, rejection, interview, offer) and the write that would record it |
 | `recent_writes` | read | Audit log of the server's writes |
 | `add_application` | write | New row with the not-applied status; other columns via `extra`; refuses duplicates |
+| `add_applications` | write | Up to 50 new rows in one write: one preview, one yes, one undo; all or nothing |
 | `mark_applied` | write | Submitted: date, channel, status, follow-up date by your rule |
 | `set_status` | write | New status from your dropdown; a closed status cancels the pending follow-up; the first reply fills the reply date (`on`, default today) |
+| `set_statuses` | write | Up to 50 status changes in one write, each as `set_status` makes it: one preview, one yes, one undo; all or nothing |
 | `log_followup` | write | Log a sent follow-up, schedule the next one or close |
 | `reschedule_followup` | write | Move the next follow-up, or plan none, when nothing was sent (no contact yet, waiting for credits) |
 | `edit_application` | write | Correct fields of one row: a wrong or missing date, a typo, the furthest stage, a custom column; dates are checked, the reason goes to the notes |

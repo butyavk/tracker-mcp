@@ -58,6 +58,9 @@ A job-application tracker kept by the user in Excel, a CSV file or Google Sheets
   when the user agrees in their next message, call it again with the same arguments
   plus confirm=<token from the preview>. Never use a token in the turn that got it.
 - Every write makes a backup; undo_last_write restores it if nothing changed since.
+- Several new rows, or several status changes, go in one call: add_applications or
+  set_statuses. The user sees one preview of all of them and answers once; the
+  write is all or nothing and one undo reverts it.
 - A preview may carry `warnings` (another application to the same company within
   a few weeks, say). Show them to the user with the changes before asking for a yes.
 - To correct a cell (a wrong date, a typo, the furthest stage) use edit_application,
@@ -523,10 +526,56 @@ def add_application(
     dry_run: DryRun = False,
     confirm: Confirm = None,
 ) -> dict[str, Any]:
-    """Add a new row with the not-applied status. Refuses a duplicate (same company+role or link)."""
+    """Add a new row with the not-applied status. Refuses a duplicate (same company+role or link).
+    For several rows at once use add_applications: one preview and one yes for all of them."""
     return finish(ctx, "add_application", (company, role),
                   dict(link=link, notes=notes, extra=extra, allow_duplicate=allow_duplicate),
                   approval, dry_run=dry_run, confirm=confirm)
+
+
+class NewApplication(BaseModel):
+    company: str = Field(description="Company name")
+    role: str = Field(description="Job title, as in the posting")
+    link: str | None = Field(default=None, description="Application URL")
+    notes: str | None = Field(default=None, description="Text for the notes column")
+    extra: dict[str, str] | None = Field(
+        default=None, description="Other columns: a field name from describe_tracker or an exact header text -> value")
+    allow_duplicate: bool = Field(default=False, description="Add it even though the tracker already has it")
+
+
+class StatusChange(BaseModel):
+    row: int = Field(description="Sheet row number of the application")
+    status: str = Field(description="A value from the status dropdown")
+    response: str | None = Field(default=None, description="What the company replied; appended to the response column")
+    note: str | None = Field(default=None, description="Appended to the notes column")
+    on: date | None = Field(default=None, description="When the reply came; default today")
+
+
+def _dump(items: list[Any]) -> list[dict[str, Any]]:
+    return [i.model_dump() if isinstance(i, BaseModel) else dict(i) for i in items]
+
+
+def _ask_add_many(ctx: Context, items: list[NewApplication], expected_version: str | None = None,
+                  dry_run: bool = False):
+    return ask(ctx, "add_applications", (_dump(items),), {}, expected_version=expected_version, dry_run=dry_run)
+
+
+@tool("Add several applications", ADD)
+def add_applications(
+    ctx: Context,
+    approval: Annotated[Approval, Resolve(_ask_add_many)],
+    items: Annotated[list[NewApplication], Field(min_length=1, max_length=Tracker.BATCH_LIMIT,
+                                                 description="The new rows, in the order to add them")],
+    expected_version: Version = None,
+    dry_run: DryRun = False,
+    confirm: Confirm = None,
+) -> dict[str, Any]:
+    """Add several new rows in one write, each with the not-applied status. Each item
+    takes the arguments of add_application. The user sees one preview of every row and
+    answers once. The write is all or nothing: if one item is refused (a duplicate, an
+    unknown column), nothing is written and the error names that item. It makes one
+    backup, so one undo_last_write removes the whole batch."""
+    return finish(ctx, "add_applications", (_dump(items),), {}, approval, dry_run=dry_run, confirm=confirm)
 
 
 def _ask_applied(ctx: Context, row: int, applied_on: date | None = None, channel: str | None = None,
@@ -592,9 +641,34 @@ def set_status(
     appended with a date. The furthest-stage column moves forward, never back. The
     first reply fills the reply date with `on`, and a closed status clears a pending
     follow-up date. For a new submission use mark_applied, and for many silent
-    applications at once use close_stale. To fix another cell, use edit_application."""
+    applications at once use close_stale. To fix another cell, use edit_application.
+    For several rows at once use set_statuses: one preview and one yes for all of them."""
     return finish(ctx, "set_status", (row, status), dict(response=response, note=note, on=on),
                   approval, dry_run=dry_run, confirm=confirm)
+
+
+def _ask_statuses(ctx: Context, items: list[StatusChange], expected_version: str | None = None,
+                  dry_run: bool = False):
+    return ask(ctx, "set_statuses", (_dump(items),), {}, expected_version=expected_version, dry_run=dry_run)
+
+
+@tool("Set several statuses", EDIT)
+def set_statuses(
+    ctx: Context,
+    approval: Annotated[Approval, Resolve(_ask_statuses)],
+    items: Annotated[list[StatusChange], Field(min_length=1, max_length=Tracker.BATCH_LIMIT,
+                                               description="One status change per row")],
+    expected_version: Version = None,
+    dry_run: DryRun = False,
+    confirm: Confirm = None,
+) -> dict[str, Any]:
+    """Change the status of several applications in one write, for example after a
+    day of replies. Each item takes the arguments of set_status and is applied as
+    set_status applies it. The user sees one preview of every row and answers once. A
+    row may appear only once. The write is all or nothing: if one row is refused,
+    nothing is written and the error names that row. It makes one backup, so one
+    undo_last_write reverts the whole batch."""
+    return finish(ctx, "set_statuses", (_dump(items),), {}, approval, dry_run=dry_run, confirm=confirm)
 
 
 def _ask_followup(ctx: Context, row: int, text: str, next_on: date | None = None, final: bool = False,
