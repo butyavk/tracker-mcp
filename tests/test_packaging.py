@@ -11,14 +11,33 @@ def test_versions_and_names_match():
     version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
     server = json.loads((ROOT / "server.json").read_text(encoding="utf-8"))
     manifest = json.loads((ROOT / "mcpb" / "manifest.json").read_text(encoding="utf-8"))
-    plugin = json.loads((ROOT / "plugin" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     assert server["version"] == server["packages"][0]["version"] == manifest["version"] == version
-    assert plugin["version"] == version and plugin["mcpServers"]["tracker"]["args"] == [f"tracker-mcp=={version}"]
     headings = [line.split()[1] for line in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").splitlines()
                 if line.startswith("## ")]
     assert version in headings
     # The registry accepts the PyPI package only if its README names the server.
     assert f"mcp-name: {server['name']}" in (ROOT / "README.md").read_text(encoding="utf-8")
+
+
+def test_the_plugin_runs_a_locked_published_version():
+    # The plugin runs tracker-mcp from PyPI with every dependency locked. It may lag
+    # behind this version, because the release workflow moves it only once PyPI serves
+    # the new one. Its manifest, pin and lock must agree.
+    plugin = json.loads((ROOT / "plugin" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+    project = tomllib.loads((ROOT / "plugin" / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    lock = tomllib.loads((ROOT / "plugin" / "uv.lock").read_text(encoding="utf-8"))
+    locked = {p["name"]: p for p in lock["package"]}
+    v = plugin["version"]
+    assert project["version"] == v and project["dependencies"] == [f"tracker-mcp=={v}"]
+    assert locked["tracker-mcp"]["version"] == v
+    assert locked["tracker-mcp"]["source"] == {"registry": "https://pypi.org/simple"}
+    assert plugin["mcpServers"]["tracker"]["command"] == "uv"
+    assert plugin["mcpServers"]["tracker"]["args"] == [
+        "run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--frozen", "tracker-mcp"]
+    package = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    assert tuple(map(int, v.split("."))) <= tuple(map(int, package.split(".")))
+    # the directory reads files up to 256 KiB
+    assert (ROOT / "plugin" / "uv.lock").stat().st_size < 256 * 1024
 
 
 def test_the_extension_lists_the_real_tools():

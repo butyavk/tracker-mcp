@@ -6,14 +6,16 @@ which channel brings the most replies, and tell Claude what happened ("applied t
 via a referral", "Globex rejected me"): it shows the exact cells it will change and
 writes them only after your yes, with a backup and undo.
 
-The plugin starts the open-source server `tracker-mcp` from PyPI with `uvx` (you need
-[uv](https://docs.astral.sh/uv/)) and adds a `weekly-review` skill. It asks for one
-setting: the path to your tracker file. On first start the server writes a small config
-next to the file, describing your columns and statuses; Claude tells you what to check.
+The plugin starts the open-source server `tracker-mcp` from PyPI with
+[uv](https://docs.astral.sh/uv/), which you need. It also adds a `weekly-review` skill.
+It asks for one setting: the path to your tracker file. On first start the server writes
+a small config next to the file, describing your columns and statuses; Claude tells you
+what to check.
 
-What it runs and touches: the `tracker-mcp` package, pinned to an exact version; your
-tracker file, its config, and a `backups-tracker-mcp` folder next to it for backups and
-an audit log. It sends nothing anywhere and has no telemetry.
+What it runs: the `tracker-mcp` package and its dependencies, each at the exact version
+and hash in `uv.lock`. uv installs them into a `.venv` folder inside the plugin. What it
+touches: your tracker file, its config, and a `backups-tracker-mcp` folder next to it
+for backups and an audit log. It sends nothing anywhere and has no telemetry.
 
 Install in Claude Code:
 

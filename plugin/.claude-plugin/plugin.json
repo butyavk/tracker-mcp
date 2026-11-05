@@ -1,7 +1,7 @@
 {
   "name": "tracker-mcp",
   "displayName": "Job-application tracker",
-  "version": "0.6.0",
+  "version": "0.5.2",
   "description": "Keep your job-application spreadsheet (Excel or CSV) with Claude: follow-ups due, silent applications, a reply/interview funnel, and changes written only after your yes.",
   "author": {
     "name": "Ivan Rykov",
@@ -25,8 +25,8 @@
   },
   "mcpServers": {
     "tracker": {
-      "command": "uvx",
-      "args": ["tracker-mcp==0.6.0"],
+      "command": "uv",
+      "args": ["run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--frozen", "tracker-mcp"],
       "env": {
         "TRACKER_PATH": "${user_config.tracker}"
       }

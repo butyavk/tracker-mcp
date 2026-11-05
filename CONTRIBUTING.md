@@ -37,18 +37,23 @@ confirmation flow in `server.py`. Please keep new writes on that path.
 
 ## Releases
 
-1. Bump the version in `pyproject.toml`, `server.json` (twice), `mcpb/manifest.json` and
-   `plugin/.claude-plugin/plugin.json` (the version and the `tracker-mcp==` pin), add a
-   section to `CHANGELOG.md`, run `uv lock`.
-   `tests/test_packaging.py` checks that they agree.
+1. Bump the version in `pyproject.toml`, `server.json` (twice) and `mcpb/manifest.json`,
+   add a section to `CHANGELOG.md`, run `uv lock`. Leave `plugin/` as it is: the release
+   moves it. `tests/test_packaging.py` checks that they agree.
 2. Start the release: GitHub → Actions → **release** → **Run workflow** on `main` (or
    push the tag, `git tag v0.3.1 && git push origin v0.3.1`).
 3. `.github/workflows/release.yml` checks the versions, runs the tests, publishes to
    PyPI (trusted publishing, no token) and to the MCP Registry (GitHub OIDC), and
-   makes the GitHub release and its tag with the `.mcpb` extension attached.
+   makes the GitHub release and its tag with the `.mcpb` extension attached. When PyPI
+   serves the new version, the workflow moves the plugin to it. It changes the pin in
+   `plugin/pyproject.toml`, `plugin/uv.lock` and the version in its `plugin.json`, in one
+   commit on `main`.
 
 `sh mcpb/build.sh` builds the extension locally (needs Node).
 
 `plugin/` is the Claude plugin (the server plus a `weekly-review` skill), installable
 from this repository's marketplace and submittable to Claude's plugin directory at
-claude.ai/directory/manage. Check it with `claude plugin validate ./plugin`.
+claude.ai/directory/manage. It runs the published package with `uv run --frozen`.
+Every dependency comes at the exact version and hash in `plugin/uv.lock`. The directory
+sends a plugin that runs a bare `uvx` package to a manual review. Check it with
+`claude plugin validate ./plugin`.

@@ -2,8 +2,10 @@
 # workflow) or by pushing its tag (v0.3.0):
 #   1. PyPI (trusted publishing: no token; the PyPI project trusts this workflow),
 #   2. the official MCP Registry (GitHub OIDC: the io.github.butyavk namespace),
-#   3. a GitHub release and its tag, with the Claude Desktop extension (.mcpb).
-# The version must match server.json, mcpb/manifest.json, the plugin and CHANGELOG.md.
+#   3. a GitHub release and its tag, with the Claude Desktop extension (.mcpb),
+#   4. the Claude plugin: when PyPI serves the version, a commit on main moves the
+#      plugin's pin, lock and version to it.
+# The version must match server.json, mcpb/manifest.json and CHANGELOG.md.
 name: release
 
 on:
@@ -31,8 +33,6 @@ jobs:
           test "$(jq -r .version server.json)" = "$v"
           test "$(jq -r '.packages[0].version' server.json)" = "$v"
           test "$(jq -r .version mcpb/manifest.json)" = "$v"
-          test "$(jq -r .version plugin/.claude-plugin/plugin.json)" = "$v"
-          test "$(jq -r '.mcpServers.tracker.args[0]' plugin/.claude-plugin/plugin.json)" = "tracker-mcp==$v"
           awk -v v="$v" '$1 == "##" && $2 == v {found = 1} END {exit !found}' CHANGELOG.md
       - name: Tests
         run: |
@@ -133,3 +133,39 @@ jobs:
           awk -v v="$v" '/^## /{p = ($2 == v); next} p' CHANGELOG.md > notes.md
           gh release create "v$v" --target "$GITHUB_SHA" --title "tracker-mcp $v" --notes-file notes.md \
             artifacts/mcpb/*.mcpb artifacts/dist/*
+
+  plugin:
+    # The plugin runs the published package with every dependency locked (plugin/uv.lock).
+    # So it can move to this version only after PyPI serves it.
+    needs: [build, pypi]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+      - uses: astral-sh/setup-uv@v7
+      - name: Pin and lock the new version
+        run: |
+          v="${{ needs.build.outputs.version }}"
+          sed -i "0,/\"version\": \"[^\"]*\"/s//\"version\": \"$v\"/" plugin/.claude-plugin/plugin.json
+          sed -i "s/^version = \".*\"/version = \"$v\"/; s/\"tracker-mcp==[^\"]*\"/\"tracker-mcp==$v\"/" plugin/pyproject.toml
+          for i in $(seq 30); do   # the index can lag a little behind the JSON API
+            (cd plugin && uv lock --refresh-package tracker-mcp) && break
+            sleep 10
+          done
+      - name: Check the plugin
+        run: |
+          v="${{ needs.build.outputs.version }}"
+          test "$(uv run --project plugin --frozen tracker-mcp --version | awk '{print $NF}')" = "$v"
+          uv run --frozen pytest -q tests/test_packaging.py
+      - name: Commit to main
+        run: |
+          v="${{ needs.build.outputs.version }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add plugin
+          git diff --cached --quiet && exit 0
+          git commit -m "plugin: tracker-mcp $v"
+          git push origin HEAD:main
