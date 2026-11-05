@@ -1,7 +1,7 @@
-# The plugin runs the published tracker-mcp from PyPI. Every dependency is locked in
-# uv.lock with its exact version, source and hash, and `uv run --frozen` installs
-# exactly that. After each release reaches PyPI, the release workflow moves the pin,
-# the lock and the plugin's version to it.
+# The plugin starts the published tracker-mcp with `uvx tracker-mcp==<version>`. The
+# plugin directory reads this file and uv.lock to see every dependency with its exact
+# version, source and hash. After each release reaches PyPI, the release workflow moves
+# the pin, the lock and the plugin's version to it.
 [project]
 name = "tracker-mcp-plugin"
 version = "0.6.0"

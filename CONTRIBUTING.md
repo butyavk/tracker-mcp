@@ -53,7 +53,7 @@ confirmation flow in `server.py`. Please keep new writes on that path.
 
 `plugin/` is the Claude plugin (the server plus a `weekly-review` skill), installable
 from this repository's marketplace and submittable to Claude's plugin directory at
-claude.ai/directory/manage. It runs the published package with `uv run --frozen`.
-Every dependency comes at the exact version and hash in `plugin/uv.lock`. The directory
-sends a plugin that runs a bare `uvx` package to a manual review. Check it with
-`claude plugin validate ./plugin`.
+claude.ai/directory/manage. It starts the published package with
+`uvx tracker-mcp==<version>`. `plugin/pyproject.toml` and `plugin/uv.lock` list every
+dependency with its exact version and hash, for the directory's checks. Check the
+plugin with `claude plugin validate ./plugin`.

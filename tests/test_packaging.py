@@ -20,9 +20,10 @@ def test_versions_and_names_match():
 
 
 def test_the_plugin_runs_a_locked_published_version():
-    # The plugin runs tracker-mcp from PyPI with every dependency locked. It may lag
-    # behind this version, because the release workflow moves it only once PyPI serves
-    # the new one. Its manifest, pin and lock must agree.
+    # The plugin runs a published tracker-mcp, and plugin/uv.lock records every
+    # dependency for the directory. It may lag behind this version, because the release
+    # workflow moves it only once PyPI serves the new one. Its manifest, pin and lock
+    # must agree.
     plugin = json.loads((ROOT / "plugin" / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
     project = tomllib.loads((ROOT / "plugin" / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     lock = tomllib.loads((ROOT / "plugin" / "uv.lock").read_text(encoding="utf-8"))
@@ -31,9 +32,9 @@ def test_the_plugin_runs_a_locked_published_version():
     assert project["version"] == v and project["dependencies"] == [f"tracker-mcp=={v}"]
     assert locked["tracker-mcp"]["version"] == v
     assert locked["tracker-mcp"]["source"] == {"registry": "https://pypi.org/simple"}
-    assert plugin["mcpServers"]["tracker"]["command"] == "uv"
-    assert plugin["mcpServers"]["tracker"]["args"] == [
-        "run", "--project", "${CLAUDE_PLUGIN_ROOT}", "--frozen", "tracker-mcp"]
+    # the directory reads the lock only for a launcher written as uvx <package>==<version>
+    assert plugin["mcpServers"]["tracker"]["command"] == "uvx"
+    assert plugin["mcpServers"]["tracker"]["args"] == [f"tracker-mcp=={v}"]
     package = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
     assert tuple(map(int, v.split("."))) <= tuple(map(int, package.split(".")))
     # the directory reads files up to 256 KiB
