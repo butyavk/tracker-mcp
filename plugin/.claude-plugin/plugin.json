@@ -1,7 +1,7 @@
 {
   "name": "tracker-mcp",
   "displayName": "Job-application tracker",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Keep your job-application spreadsheet (Excel or CSV) with Claude: follow-ups due, silent applications, a reply/interview funnel, and changes written only after your yes.",
   "author": {
     "name": "Ivan Rykov",

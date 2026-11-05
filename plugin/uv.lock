@@ -1,10 +1,10 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.11"
 resolution-markers = [
     "python_full_version >= '3.14'",
     "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'emscripten'",
-    "(python_full_version < '3.14' and sys_platform != 'emscripten') or (python_full_version < '3.12' and sys_platform == 'emscripten')",
+    "python_full_version < '3.12' or (python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform != 'emscripten')",
 ]
 
 [[package]]
@@ -751,7 +751,7 @@ wheels = [
 
 [[package]]
 name = "tracker-mcp"
-version = "0.5.2"
+version = "0.6.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mcp" },
@@ -759,21 +759,21 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/12/92/b8976340484dd68d309ed8ec67ae877587837e6d83cbed95a114e66ad063/tracker_mcp-0.5.2.tar.gz", hash = "sha256:dd9b7e18f19ed953d1390e61b64983c77a898ea874c265c7bd6e0c93c0d90ac1", size = 161138, upload-time = "2026-10-25T10:14:50.191Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2e/88/c4fbb6a29f97684ebf4ea8b420b98b4f8f30988f74afbc8b358c0053116c/tracker_mcp-0.6.0.tar.gz", hash = "sha256:3a19b40a6530ceeaaf5aff9562bb43a6ad98840c6e048947f4cb091f3263041b", size = 166051, upload-time = "2026-11-05T10:06:11.647Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e1/32/da46cb6eeb2863a4bfce40b1f9b26cf24a92bfbd9cefa093766bf1051c6e/tracker_mcp-0.5.2-py3-none-any.whl", hash = "sha256:baa2d49e8bad25aab558f2462951862119f6b8d413d4ce57b6250c5ef06967fa", size = 117593, upload-time = "2026-10-25T10:14:48.624Z" },
+    { url = "https://files.pythonhosted.org/packages/a1/3b/0609bd767eb85737233f91d9057fe1bf0a7d3870887cf45679394460f48e/tracker_mcp-0.6.0-py3-none-any.whl", hash = "sha256:a675391640ada9a5e45d3bbde95731fd9b723e48ba3852f1b5b9a3789b5197c4", size = 119501, upload-time = "2026-11-05T10:06:10.091Z" },
 ]
 
 [[package]]
 name = "tracker-mcp-plugin"
-version = "0.5.2"
+version = "0.6.0"
 source = { virtual = "." }
 dependencies = [
     { name = "tracker-mcp" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "tracker-mcp", specifier = "==0.5.2" }]
+requires-dist = [{ name = "tracker-mcp", specifier = "==0.6.0" }]
 
 [[package]]
 name = "truststore"
