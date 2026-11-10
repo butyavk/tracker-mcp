@@ -29,7 +29,7 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/butyavk/tracker-mcp"
+Homepage = "https://butyavk.github.io/tracker-mcp/"
 Repository = "https://github.com/butyavk/tracker-mcp"
 Issues = "https://github.com/butyavk/tracker-mcp/issues"
 Changelog = "https://github.com/butyavk/tracker-mcp/blob/main/CHANGELOG.md"

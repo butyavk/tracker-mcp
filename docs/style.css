@@ -68,3 +68,10 @@ footer a { color: var(--muted); }
   .wide { display: block; overflow-x: auto; }
   .grid { grid-template-columns: 1fr; }
 }
+
+.cta { display: flex; flex-wrap: wrap; gap: 10px; margin: 20px 0 8px; }
+.btn { display: inline-block; padding: 9px 16px; border-radius: 8px; background: var(--accent);
+  color: var(--bg); font-weight: 600; text-decoration: none; }
+.btn.secondary { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+.btn:hover { opacity: 0.9; }
+@media (max-width: 480px) { nav { gap: 12px; font-size: 14px; } }

@@ -26,64 +26,6 @@ what happened, with your yes for every change.
 Also: "Which channel gets me the most replies?", "Initech rejected me", "I applied to
 Hooli via a referral today", "close everything that hasn't answered in 45 days".
 
-### Why a server? Can't Claude just do this?
-
-It can, if you set it up. Claude reads a spreadsheet you attach, and with access to your
-files (Claude Code, or Claude working in a folder on your computer) it can edit the
-tracker by writing a little code, and in claude.ai the Google Sheets connector lets it
-edit a Google Sheet directly. Give it good instructions
-(where the tracker is, what each column means, how follow-ups are counted, "back up and
-ask me before every write") and it works: tracker-mcp grew out of exactly that setup. The
-difference is where the rules live: in instructions the model reads and follows, or in a
-program that applies them.
-
-| | Claude with your instructions | tracker-mcp |
-|---|---|---|
-| Knows your tracker | From the instructions you wrote, or worked out again in each chat | Learned once from your headers and dropdowns, kept in a config |
-| Follow-up dates, silent applications, funnel | The model writes code for it each time | Fixed rules in tested code: the same answer every time |
-| Asks before writing | When the instructions say so and the model follows them | The server refuses any write you have not confirmed |
-| Backup, undo, change log | When the model makes them | Every write |
-| Dropdowns and formulas on new rows | Depends on the code written for that change | Extended to new rows, every time |
-| Excel has the file open, or it changed meanwhile | Checked if the model thinks of it | The write is refused |
-| Text pasted from job posts and e-mails | Text starting with "=" becomes a formula unless the code prevents it | Always written as text |
-| What earlier edits left behind (text dates, rows without a status) | Found if you ask, fixed by code written for it | `check_tracker` finds it, `fix_tracker` fixes it in one confirmed write |
-| When each reply came | Known only if someone wrote it down | Recorded on every reply; `reply_times` shows when replies stop coming |
-| Replies in your mailbox | The model reads them and decides which row each is about | `match_emails` names the row and the change, the same way every time |
-| Each request | Write, run and check a script | One tool call |
-| Free-form analysis, charts, reshaping the sheet | Anything | Not its job: Claude still does that alongside |
-| Where | Where Claude can run code on your files, or on a copy you upload | Any MCP client: Claude Desktop (in a normal chat), Claude Code, Cursor, ...; in a browser or on a phone through [your own server](#remote-server-claude-on-the-web-and-on-your-phone) |
-
-So tracker-mcp mostly does not give Claude new abilities. It gives the everyday part
-of a job search (record what happened, see what is due, see what works) fixed rules and
-fixed safety, with no instructions to write. The one thing Claude cannot do later is
-know when a reply came if nobody wrote it down; the server writes it down as it happens.
-
-- **Rules belong in code, not in a prompt.** "Which follow-ups are due?" is date
-  arithmetic with your rule: 10 days after applying, then every 14, weekends moved to
-  Monday, nothing for closed applications. A model gets it right most of the time, but it
-  works it out anew in each chat, and the slips are the quiet kind: a follow-up for a
-  rejected application, a date on a Sunday, a status spelled differently from your
-  dropdown. Here the rule is code covered by tests. The same goes for silent applications
-  and the funnel.
-- **Safety the model cannot skip.** You see the exact cells that will change, and your
-  yes is checked by the server, not taken on the model's word. That matters most where no
-  one re-reads the instructions: a scheduled weekly review, a long chat, a note pasted from
-  a job post that tells the model to do something.
-- **Fewer steps.** One tool call instead of writing and running a script, so answers come
-  quicker and the model's attention stays on your question.
-- **The same tracker everywhere.** Every chat, a scheduled review and every client you
-  use work on the same file, and each change lands in it right away.
-
-Your spreadsheet stays yours: you keep opening it in Excel or Sheets, sorting and
-editing it. Nothing about a particular tracker is in the code; the server reads your
-headers and dropdowns and keeps what it learned in a small config file.
-
-You don't need tracker-mcp if you only want a one-time analysis of your applications,
-if you rarely update the tracker, or if you only use Claude in a browser or on your phone
-and don't want to run [a server of your own](#remote-server-claude-on-the-web-and-on-your-phone):
-Claude's Google Sheets connector may be enough. If Claude already keeps your tracker well with
-instructions you wrote, what you gain is reliability, not new features.
-
 ## Quick start
 
 **Let an agent do it.** Paste this into Claude Code or Codex; it installs what is
@@ -92,7 +34,7 @@ needed, asks where your tracker is, connects it and checks the result:
 ```text
 Install tracker-mcp for me: an MCP server that lets AI keep my job-application spreadsheet.
 Read the instructions for agents and follow them:
-https://raw.githubusercontent.com/butyavk/tracker-mcp/main/docs/agent-setup.md
+https://raw.githubusercontent.com/butyavk/tracker-mcp/v0.6.0/docs/agent-setup.md
 First ask me where my tracker is and which app to connect it to.
 Don't edit the tracker yourself, and check at the end that it works.
 ```
@@ -179,6 +121,67 @@ The server answers when asked; it does not send reminders. Two habits make it pa
 - **After each event**, tell Claude in a sentence: "applied to X via Y", "X rejected
   me", "sent the follow-up to X", "can't follow up with X until Friday". It finds the
   row, shows the change and writes it when you say yes.
+
+<details>
+<summary><b>Why a server? Can't Claude just do this?</b></summary>
+
+It can, if you set it up. Claude reads a spreadsheet you attach, and with access to your
+files (Claude Code, or Claude working in a folder on your computer) it can edit the
+tracker by writing a little code, and in claude.ai the Google Sheets connector lets it
+edit a Google Sheet directly. Give it good instructions
+(where the tracker is, what each column means, how follow-ups are counted, "back up and
+ask me before every write") and it works: tracker-mcp grew out of exactly that setup. The
+difference is where the rules live: in instructions the model reads and follows, or in a
+program that applies them.
+
+| | Claude with your instructions | tracker-mcp |
+|---|---|---|
+| Knows your tracker | From the instructions you wrote, or worked out again in each chat | Learned once from your headers and dropdowns, kept in a config |
+| Follow-up dates, silent applications, funnel | The model writes code for it each time | Fixed rules in tested code: the same answer every time |
+| Asks before writing | When the instructions say so and the model follows them | The server refuses any write you have not confirmed |
+| Backup, undo, change log | When the model makes them | Every write |
+| Dropdowns and formulas on new rows | Depends on the code written for that change | Extended to new rows, every time |
+| Excel has the file open, or it changed meanwhile | Checked if the model thinks of it | The write is refused |
+| Text pasted from job posts and e-mails | Text starting with "=" becomes a formula unless the code prevents it | Always written as text |
+| What earlier edits left behind (text dates, rows without a status) | Found if you ask, fixed by code written for it | `check_tracker` finds it, `fix_tracker` fixes it in one confirmed write |
+| When each reply came | Known only if someone wrote it down | Recorded on every reply; `reply_times` shows when replies stop coming |
+| Replies in your mailbox | The model reads them and decides which row each is about | `match_emails` names the row and the change, the same way every time |
+| Each request | Write, run and check a script | One tool call |
+| Free-form analysis, charts, reshaping the sheet | Anything | Not its job: Claude still does that alongside |
+| Where | Where Claude can run code on your files, or on a copy you upload | Any MCP client: Claude Desktop (in a normal chat), Claude Code, Cursor, ...; in a browser or on a phone through [your own server](#remote-server-claude-on-the-web-and-on-your-phone) |
+
+So tracker-mcp mostly does not give Claude new abilities. It gives the everyday part
+of a job search (record what happened, see what is due, see what works) fixed rules and
+fixed safety, with no instructions to write. The one thing Claude cannot do later is
+know when a reply came if nobody wrote it down; the server writes it down as it happens.
+
+- **Rules belong in code, not in a prompt.** "Which follow-ups are due?" is date
+  arithmetic with your rule: 10 days after applying, then every 14, weekends moved to
+  Monday, nothing for closed applications. A model gets it right most of the time, but it
+  works it out anew in each chat, and the slips are the quiet kind: a follow-up for a
+  rejected application, a date on a Sunday, a status spelled differently from your
+  dropdown. Here the rule is code covered by tests. The same goes for silent applications
+  and the funnel.
+- **Safety the model cannot skip.** You see the exact cells that will change, and your
+  yes is checked by the server, not taken on the model's word. That matters most where no
+  one re-reads the instructions: a scheduled weekly review, a long chat, a note pasted from
+  a job post that tells the model to do something.
+- **Fewer steps.** One tool call instead of writing and running a script, so answers come
+  quicker and the model's attention stays on your question.
+- **The same tracker everywhere.** Every chat, a scheduled review and every client you
+  use work on the same file, and each change lands in it right away.
+
+Your spreadsheet stays yours: you keep opening it in Excel or Sheets, sorting and
+editing it. Nothing about a particular tracker is in the code; the server reads your
+headers and dropdowns and keeps what it learned in a small config file.
+
+You don't need tracker-mcp if you only want a one-time analysis of your applications,
+if you rarely update the tracker, or if you only use Claude in a browser or on your phone
+and don't want to run [a server of your own](#remote-server-claude-on-the-web-and-on-your-phone):
+Claude's Google Sheets connector may be enough. If Claude already keeps your tracker well with
+instructions you wrote, what you gain is reliability, not new features.
+
+</details>
 
 ## Where your tracker can live
 

@@ -31,6 +31,8 @@
   (Claude, or any client that speaks the Model Context Protocol) to the spreadsheet where you
   track your job applications. The assistant answers from it, tells you which follow-ups are
   due, and records what happened, and nothing is written without your yes.</p>
+  <p class="cta"><a class="btn" href="#get-started">Get started</a>
+  <a class="btn secondary" href="https://github.com/butyavk/tracker-mcp">Star on GitHub</a></p>
 </header>
 <main>
   <div class="chat">
@@ -76,12 +78,12 @@
   your computer; there is no tracker-mcp server, and the developer never receives your data.
   Details: <a href="privacy.html">privacy policy</a>.</p>
 
-  <h2>Get started</h2>
+  <h2 id="get-started">Get started</h2>
   <p><strong>Let an agent do it.</strong> Paste this into Claude Code or Codex; it installs what is
   needed, asks where your tracker is, connects it and checks the result:</p>
   <pre><code>Install tracker-mcp for me: an MCP server that lets AI keep my job-application spreadsheet.
 Read the instructions for agents and follow them:
-https://raw.githubusercontent.com/butyavk/tracker-mcp/main/docs/agent-setup.md
+https://raw.githubusercontent.com/butyavk/tracker-mcp/v0.6.0/docs/agent-setup.md
 First ask me where my tracker is and which app to connect it to.
 Don't edit the tracker yourself, and check at the end that it works.</code></pre>
   <p>Or by hand. You need <a href="https://docs.astral.sh/uv/getting-started/installation/">uv</a>. Then pick your client:</p>
