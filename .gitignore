@@ -9,3 +9,13 @@ dist-mcpb/
 *.mcpb
 # the built-in Google client's secret, written by the release build
 src/tracker_mcp/_google_client.py
+
+# Secrets are never committed (Ivan, 13.11.2026): only *.example files without real values
+.env
+.env.*
+!.env.example
+*.pem
+*.p8
+*.p12
+secrets.*
+credentials*.json
