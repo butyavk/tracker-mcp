@@ -302,7 +302,8 @@ def test_edit_over_mcp_needs_a_yes(tmp_path):
         async with Client(server.mcp) as c:
             tools = {x.name: x for x in (await c.list_tools()).tools}
             assert tools["edit_application"].annotations.destructive_hint is True
-            args = {"row": 2, "fields": {"applied_on": "2026-09-03"}, "reason": "from the confirmation"}
+            args = {"row": 2, "fields": {"applied_on": "2026-09-03"}, "reason": "from the confirmation",
+                    "expected_version": server.tracker().version()}
             res = await c.call_tool("edit_application", args)
             assert res.is_error and "confirmation" in res.content[0].text
             preview = await c.call_tool("edit_application", {**args, "dry_run": True})
@@ -422,7 +423,8 @@ def test_add_column_over_mcp_and_the_next_call_sees_the_new_config(tmp_path, mon
         async with Client(server.mcp) as c:
             args = {"header": "Recruiter", "field": "recruiter"}
             preview = await c.call_tool("add_column", {**args, "dry_run": True})
-            res = await c.call_tool("add_column", {**args, "confirm": preview.structured_content["confirm"]})
+            res = await c.call_tool("add_column", {**args, "confirm": preview.structured_content["confirm"],
+                                                   "expected_version": preview.structured_content["version"]})
             assert not res.is_error, res.content[0].text
             d = (await c.call_tool("describe_tracker", {})).structured_content
             assert d["fields"]["recruiter"] == "Recruiter" if "fields" in d else "recruiter" in str(d)

@@ -50,14 +50,19 @@ A job-application tracker kept by the user in Excel, a CSV file or Google Sheets
 - Rows are identified by their sheet row number (`row`), as in the spreadsheet. If
   the user sorts or edits the sheet, row numbers change: re-read before writing.
   Previews name each row ("Row 12 · Acme — EM") so the user can check it.
-- Pass `expected_version` (the `version` of your last read) to every write. A write
-  is refused if the tracker changed since; then read again.
+- Pass `expected_version` (the `version` of your last read or dry run) to every write:
+  a write without it is refused, and so is one made after the tracker changed; then
+  read again.
 - Every write needs the user's yes, and the server enforces it. If your client can
   show a confirmation dialog, the server asks the user there. Otherwise call the
   write tool with dry_run=true, show the user the changes and end your turn; only
   when the user agrees in their next message, call it again with the same arguments
   plus confirm=<token from the preview>. Never use a token in the turn that got it.
-- Every write makes a backup; undo_last_write restores it if nothing changed since.
+- Every write makes a backup. undo_last_write reverts the latest write that is not
+  undone yet; called again, it steps further back, one write at a time, as long as
+  nobody edited the tracker in between.
+- Started with --read-only (as for a scheduled task with nobody to say yes), the server
+  makes dry runs and previews but refuses every write; describe_tracker says so.
 - Several new rows, or several status changes, go in one call: add_applications or
   set_statuses. The user sees one preview of all of them and answers once; the
   write is all or nothing and one undo reverts it.
@@ -85,9 +90,10 @@ mcp = MCPServer(
 # the model even in a client that does not pass the server's instructions on.
 WRITE_NOTE = ("The tool writes only with the user's yes. The client may ask in its own confirmation "
               "dialog. Otherwise call with dry_run=true, show the preview to the user, and after they "
-              "agree in a new message repeat the same call with confirm=<token>. The write is refused "
-              "if the tracker changed since expected_version.")
-UNDO_NOTE = "A backup is taken first, and undo_last_write reverts the write."
+              "agree in a new message repeat the same call with confirm=<token>. expected_version is "
+              "required, and the write is refused if the tracker changed since. A server started with "
+              "--read-only makes dry runs only.")
+UNDO_NOTE = "A backup is taken first, and undo_last_write reverts the write (again for earlier ones)."
 
 
 def tool(title: str, annotations: ToolAnnotations):
@@ -109,8 +115,8 @@ EDIT = ToolAnnotations(read_only_hint=False, destructive_hint=True, idempotent_h
                        open_world_hint=False)
 
 Row = Annotated[int, Field(description="Sheet row number of the application (see list/get results)")]
-Version = Annotated[str | None, Field(description="`version` from your last read; the write is "
-                                                  "refused if the file changed since")]
+Version = Annotated[str | None, Field(description="`version` from your last read or dry run; required for "
+                                                  "a write, which is refused if the file changed since")]
 DryRun = Annotated[bool, Field(description="Only show what would change, plus the confirm token; write nothing")]
 Confirm = Annotated[str | None, Field(description="Token from the dry run the user approved. Not needed "
                                                   "when the client shows the server's confirmation dialog")]
@@ -200,6 +206,8 @@ def call(method: str, *args: Any, **kwargs: Any) -> dict[str, Any]:
 
 def _describe() -> dict[str, Any]:
     out = call("describe")
+    if READ_ONLY:
+        out = {**out, "read_only": "this server runs read-only: dry runs and previews only, every write is refused"}
     return {**out, "config_generated": _generated} if _generated else out
 
 
@@ -287,9 +295,20 @@ def describe_plan(tool: str, plan: dict[str, Any]) -> str:
     return f"{text}\n\n(plan {plan_token(plan)})"
 
 
+READ_ONLY = os.environ.get("TRACKER_READ_ONLY", "").strip().lower() in ("1", "true", "yes")
+
+
 def ask(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], *,
         expected_version: str | None, dry_run: bool) -> Elicit[WriteConfirmation] | str:
     """Resolver body: make the plan and decide how the user approves it."""
+    if not dry_run and READ_ONLY:
+        raise ToolError("Not written: this server runs read-only (--read-only or TRACKER_READ_ONLY), as for "
+                        "a scheduled task with nobody to say yes. Call with dry_run=true and list the change "
+                        "for the user; it is written in a session where they can confirm.")
+    if not dry_run and not expected_version:
+        raise ToolError("Not written: expected_version is required. Read the tracker (any read, or this "
+                        "tool with dry_run=true, returns `version`) and pass it, so a write never lands on "
+                        "a tracker that changed since you looked.")
     plan = call(method, *args, dry_run=True, expected_version=expected_version, **kwargs)
     now = time.monotonic()
     while _plans and (len(_plans) >= 1000 or next(iter(_plans.values()))[0] < now - PLAN_TTL):
@@ -1033,12 +1052,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--config", help="its config, if not <tracker>.tracker-mcp.toml (or TRACKER_CONFIG)")
     parser.add_argument("--backup-dir", help="where backups and audit.jsonl go (or TRACKER_BACKUP_DIR)")
     parser.add_argument("--check", action="store_true", help="print how the config maps the tracker, then exit")
+    parser.add_argument("--read-only", action="store_true",
+                        help="dry runs and previews only, every write refused: for scheduled tasks (or TRACKER_READ_ONLY=1)")
     parser.add_argument("--version", action="version", version=f"tracker-mcp {__version__}")
     args = parser.parse_args(argv)
     for opt, env in ((args.tracker, "TRACKER_PATH"), (args.config, "TRACKER_CONFIG"),
                      (args.backup_dir, "TRACKER_BACKUP_DIR")):
         if opt:
             os.environ[env] = opt
+    global READ_ONLY
+    if args.read_only:
+        os.environ["TRACKER_READ_ONLY"] = "1"
+        READ_ONLY = True
     path = os.environ.get("TRACKER_PATH")
     if not path or not (is_google_sheet(path) or os.path.exists(os.path.expanduser(path))):
         print(f"tracker-mcp: pass --tracker (or set TRACKER_PATH) to an .xlsx or .csv file or a Google "

@@ -225,3 +225,40 @@ def test_close_stale_in_one_batch(tmp_path):
     assert len(list(t.backup_dir.glob("*.xlsx"))) == 1          # one backup for the batch
     t.undo_last_write()
     assert t.version() == before                                # one undo for the batch
+
+
+def test_undo_steps_back_through_several_writes(t):
+    v0 = t.version()
+    t.log_followup(7, "FU-1 sent")
+    v1 = t.version()
+    t.set_status(7, "Скрининг")
+    v2 = t.version()
+    t.log_followup(7, "call booked")
+    t.undo_last_write()
+    assert t.version() == v2
+    t.undo_last_write()
+    assert t.version() == v1
+    t.undo_last_write()
+    assert t.version() == v0
+    with pytest.raises(TrackerError, match="Nothing left to undo"):
+        t.undo_last_write()
+
+
+def test_undo_stops_at_a_hand_edit_between_writes(t):
+    t.log_followup(7, "FU-1 sent")
+    openpyxl.load_workbook(t.path).save(t.path)       # someone saves the file by hand
+    t.set_status(7, "Скрининг")
+    t.undo_last_write()                                # the status change: fine
+    with pytest.raises(ConflictError, match="changed after"):
+        t.undo_last_write()                            # the follow-up: the hand edit is in the way
+
+
+def test_undo_after_a_new_write_reverts_the_new_one_first(t):
+    v0 = t.version()
+    t.log_followup(7, "FU-1 sent")
+    t.undo_last_write()
+    t.set_status(7, "Скрининг")
+    t.undo_last_write()
+    assert t.version() == v0
+    with pytest.raises(TrackerError, match="Nothing left"):
+        t.undo_last_write()

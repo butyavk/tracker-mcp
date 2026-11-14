@@ -273,11 +273,12 @@ def test_new_tools_over_mcp(tmp_path):
             assert tools["fix_tracker"].annotations.destructive_hint is True
             assert tools["export_followups_calendar"].annotations.destructive_hint is False
             assert "on" in tools["set_status"].input_schema["properties"]
-            res = await c.call_tool("fix_tracker", {})
+            res = await c.call_tool("fix_tracker", {"expected_version": server.tracker().version()})
             assert res.is_error and "confirmation" in res.content[0].text
             preview = await c.call_tool("fix_tracker", {"kinds": ["no_status"], "dry_run": True})
             token = preview.structured_content["confirm"]
-            res = await c.call_tool("fix_tracker", {"kinds": ["no_status"], "confirm": token})
+            res = await c.call_tool("fix_tracker", {"kinds": ["no_status"], "confirm": token,
+                                                    "expected_version": preview.structured_content["version"]})
             assert not res.is_error and res.structured_content["row"] == [4]
             res = await c.call_tool("match_emails", {"messages": [
                 {"from": "x@globex.com", "subject": "Unfortunately", "date": "2026-10-01"}]})

@@ -34,7 +34,7 @@ needed, asks where your tracker is, connects it and checks the result:
 ```text
 Install tracker-mcp for me: an MCP server that lets AI keep my job-application spreadsheet.
 Read the instructions for agents and follow them:
-https://raw.githubusercontent.com/butyavk/tracker-mcp/v0.6.0/docs/agent-setup.md
+https://raw.githubusercontent.com/butyavk/tracker-mcp/v0.7.0/docs/agent-setup.md
 First ask me where my tracker is and which app to connect it to.
 Don't edit the tracker yourself, and check at the end that it works.
 ```
@@ -321,7 +321,7 @@ who sign in to it, so use one run by someone you trust.
 | `fix_tracker` | write | Fix what `check_tracker` can fix, in one write, one backup, one undo step |
 | `calendar_events` | read | The open follow-ups as all-day events with a stable id line, so the client's calendar tool can add, move and remove them without duplicates |
 | `export_followups_calendar` | file | The open follow-ups as an `.ics` file next to the tracker (the tracker is not touched) |
-| `undo_last_write` | write | Restore the state before the last write, if nothing changed since |
+| `undo_last_write` | write | Revert the latest write not undone yet; again to step further back, while nothing else changed |
 
 Four prompts, for clients that show MCP prompts: **Weekly review** checks the
 tracker and goes through follow-ups, stale applications, reply times, the funnel and
@@ -374,18 +374,37 @@ overwrite cells, and all of them take `dry_run`, `expected_version` and `confirm
    token of a dry run that you saw, which fingerprints the changes and the version.
    The write lands exactly as approved, or not at all.
 2. **Nobody's edit is lost.** Each read returns a `version` (a hash of the file, or of
-   the sheet's values); a write against an old version is refused, and so is a write
-   while Excel has the file open.
+   the sheet's values). Every write must pass it as `expected_version`: a write without
+   it, or against an old version, is refused, and so is a write while Excel has the
+   file open.
 3. **Write, check, keep a backup.** Files are written to a temporary copy, re-read
    cell by cell, backed up and swapped in atomically; a Google Sheet gets one update
    of the changed cells, is read back and rolled back on any difference.
-4. **Audit and undo**: one line per write; undo only if nothing changed since.
-5. **Your data is data**: text never turns into a formula, and the model is told not
+4. **Audit and undo**: one line per write. `undo_last_write` reverts the latest write
+   that is not undone yet; call it again to step further back, one write at a time,
+   as long as nobody edited the tracker in between.
+5. **Read-only for unattended runs**: `--read-only` (or `TRACKER_READ_ONLY=1`) keeps dry
+   runs and previews and refuses every write, even with a token. A scheduled task has
+   nobody to say yes, so give it a second, read-only entry of the server (below).
+6. **Your data is data**: text never turns into a formula, and the model is told not
    to follow instructions found in cells (a pasted job post). See [SECURITY.md](SECURITY.md).
 
 Allowed statuses come from the status column's dropdown. Columns are found by
 header text, not by letter, so you can reorder them. When a row is added to an
 .xlsx file, the server stretches dropdowns, the filter and summary formulas to it.
+
+### Scheduled tasks: a read-only entry
+
+A morning check that runs on a schedule should see the tracker and prepare changes,
+not write them. Register the server a second time, read-only, and let scheduled
+prompts use that one:
+
+```
+claude mcp add tracker-ro -e TRACKER_PATH="$HOME/Documents/job-tracker.xlsx" -- uvx tracker-mcp --read-only
+```
+
+Its writes stop at the preview; you confirm them later in a session with the
+read-write entry.
 
 ## Config
 

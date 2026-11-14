@@ -189,6 +189,20 @@ def undid(undo: dict[str, Any], entry: dict[str, Any]) -> bool:
     return undo.get("undid") == entry.get("at")
 
 
+def undo_stack(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The writes of the audit log that are not undone yet, oldest first."""
+    stack: list[dict[str, Any]] = []
+    for e in entries:
+        if e["tool"] != "undo_last_write":
+            stack.append(e)
+            continue
+        for i in range(len(stack) - 1, -1, -1):
+            if undid(e, stack[i]):
+                del stack[i]
+                break
+    return stack
+
+
 class Tracker:
     def __init__(self, target: str | Path, *, config: Config, backup_dir: str | Path | None = None,
                  today: Callable[[], date] = date.today, store: Store | None = None,
@@ -1196,18 +1210,26 @@ class Tracker:
         return result
 
     def undo_last_write(self, expected_version: str | None = None, dry_run: bool = False) -> dict[str, Any]:
-        """Restore the backup of the last write, only if nothing changed since."""
+        """Undo the latest write that is not undone yet, only if nothing changed since. Called
+        again, it steps further back, one write at a time, as long as the tracker is exactly
+        as the previous undo left it."""
         entries = self._audit_entries()
-        entry = next((e for e in reversed(entries) if e["tool"] != "undo_last_write"), None)
-        if entry is None:
-            raise TrackerError("No writes to undo")
-        if entries[-1]["tool"] == "undo_last_write" and undid(entries[-1], entry):
-            raise TrackerError("The last write is already undone")
+        stack = undo_stack(entries)
+        if not stack:
+            raise TrackerError("Nothing left to undo" if entries else "No writes to undo")
+        entry = stack[-1]
         if entry.get("unverified"):
-            raise TrackerError("The last write could not be checked after it was sent, so undo cannot tell "
+            raise TrackerError("That write could not be checked after it was sent, so undo cannot tell "
                                f"what to restore safely. The old values are in {entry['backup']}.")
         current = self.version()
-        if current != entry["version_after"] or (expected_version and expected_version != current):
+        in_place = current == entry["version_after"]
+        if not in_place and entries and entries[-1]["tool"] == "undo_last_write" \
+                and entries[-1].get("version_after") == current:
+            # the previous undo restored the state before a later write; that state is the
+            # one this write left behind, unless someone edited the file in between
+            later = next((e for e in reversed(entries) if e["tool"] != "undo_last_write" and undid(entries[-1], e)), None)
+            in_place = later is not None and later.get("version_before") == entry["version_after"]
+        if not in_place or (expected_version and expected_version != current):
             raise ConflictError("The tracker changed after that write; undo would lose those changes. "
                                 f"Restore by hand from {entry['backup']} if needed.")
         if dry_run:

@@ -39,7 +39,7 @@ def test_tools_over_mcp(t):
             assert res.structured_content["total"]["applied"] == 4
             assert tools["funnel"].annotations.read_only_hint is True
 
-            res = await c.call_tool("set_status", {"row": 7, "status": "Ждём"})
+            res = await c.call_tool("set_status", {"row": 7, "status": "Ждём", "expected_version": t.version()})
             assert res.is_error and "Allowed" in res.content[0].text
 
     anyio.run(go)
@@ -50,21 +50,28 @@ def test_write_needs_the_token_when_the_client_has_no_dialog(t, mode):
     async def go():
         async with Client(server.mcp, mode=mode) as c:
             res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг"})
+            assert res.is_error and "expected_version is required" in res.content[0].text
+            v = t.version()
+            res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "expected_version": v})
             assert res.is_error and "confirmation" in res.content[0].text
             assert status_of(t, 7) == "Подана"
 
             preview = (await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "dry_run": True}))
             token = preview.structured_content["confirm"]
-            res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "confirm": "0" * 12})
+            res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "confirm": "0" * 12,
+                                                   "expected_version": v})
             assert res.is_error and status_of(t, 7) == "Подана"
 
-            other = await c.call_tool("set_status", {"row": 7, "status": "Интервью", "confirm": token})
+            other = await c.call_tool("set_status", {"row": 7, "status": "Интервью", "confirm": token,
+                                                     "expected_version": v})
             assert other.is_error and status_of(t, 7) == "Подана"   # token is for another plan
 
-            res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "confirm": token})
+            res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "confirm": token,
+                                                   "expected_version": v})
             assert not res.is_error and status_of(t, 7) == "Скрининг"
 
-            again = await c.call_tool("set_status", {"row": 7, "status": "Интервью", "confirm": token})
+            again = await c.call_tool("set_status", {"row": 7, "status": "Интервью", "confirm": token,
+                                                     "expected_version": t.version()})
             assert again.is_error                                   # the file changed: token is stale
 
     anyio.run(go)
@@ -81,7 +88,8 @@ def test_write_asks_the_user_when_the_client_has_a_dialog(t, answer, mode):
 
     async def go():
         async with Client(server.mcp, elicitation_callback=dialog, mode=mode) as c:
-            res = await c.call_tool("set_status", {"row": 7, "status": "Отказ", "response": "template"})
+            res = await c.call_tool("set_status", {"row": 7, "status": "Отказ", "response": "template",
+                                                   "expected_version": t.version()})
             return res
 
     res = anyio.run(go)
@@ -147,7 +155,8 @@ def test_config_edited_while_the_dialog_is_open(watched, mode):
 
     async def go():
         async with Client(server.mcp, elicitation_callback=dialog, mode=mode) as c:
-            return await c.call_tool("log_followup", {"row": 7, "text": "nudge"})
+            return await c.call_tool("log_followup", {"row": 7, "text": "nudge",
+                                                      "expected_version": server.tracker().version()})
 
     res = anyio.run(go)
     log = server.tracker().get_application(row=7)["applications"][0]["followup_log"]
@@ -195,3 +204,36 @@ def test_eval_harness_builds_its_tracker(tmp_path):
     t = Tracker(book, config=load_config(book))
     assert t.list_applications()["count"] == 4 and t.summary()["applied"] == 2
     assert set(ev.SCENARIOS) >= {"injection", "no_write_without_yes"}
+
+
+def test_read_only_mode_previews_but_never_writes(t, monkeypatch):
+    """A scheduled task has nobody to say yes: the server makes dry runs and refuses writes,
+    even with a valid token."""
+    monkeypatch.setattr(server, "READ_ONLY", True)
+
+    async def go():
+        async with Client(server.mcp) as c:
+            d = (await c.call_tool("describe_tracker", {})).structured_content
+            assert "read-only" in d["read_only"]
+            preview = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "dry_run": True})
+            assert not preview.is_error
+            data = preview.structured_content
+            res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "confirm": data["confirm"],
+                                                   "expected_version": data["version"]})
+            assert res.is_error and "read-only" in res.content[0].text
+            assert status_of(t, 7) == "Подана"
+
+    anyio.run(go)
+
+
+def test_read_only_from_the_command_line(monkeypatch, tmp_path):
+    from tracker_mcp.scaffold import new_tracker
+    path, _ = new_tracker(tmp_path / "jobs.xlsx")
+    monkeypatch.setattr(server, "READ_ONLY", False)
+    monkeypatch.setattr(server.mcp, "run", lambda *a, **k: None)
+    monkeypatch.delenv("TRACKER_CONFIG", raising=False)
+    monkeypatch.delenv("TRACKER_READ_ONLY", raising=False)
+    server._tracker, server._watch = None, None
+    server.main(["--tracker", str(path), "--read-only"])
+    assert server.READ_ONLY is True
+    monkeypatch.setattr(server, "READ_ONLY", False)

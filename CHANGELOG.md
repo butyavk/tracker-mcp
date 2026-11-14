@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.7.0 — 2026-11-14
+
+Added
+- `--read-only` (or `TRACKER_READ_ONLY=1`): dry runs and previews only; every write is
+  refused, even with a valid token, and `describe_tracker` says the server is read-only.
+  For scheduled tasks, which have nobody to say yes: register a second, read-only entry
+  of the server for them (README, «Scheduled tasks»).
+- `undo_last_write` steps back through several writes: each call reverts the latest
+  write that is not undone yet, as long as the tracker is exactly as that write (or the
+  previous undo) left it. A hand edit in between stops it, as before.
+
+Changed
+- `expected_version` is required for every write (it was optional). A write without it
+  is refused with a message that says how to get it; a dry run still works without one
+  and returns the version to pass.
+
 ## 0.6.0 — 2026-11-03
 
 Added

@@ -204,7 +204,8 @@ def test_sign_in_pick_a_sheet_and_use_the_tools(live):
         assert "end your turn" in prev.structured_content["next"]
         assert "names the change" in prev.structured_content["next"]   # web clients want a specific yes
         res = await live.call(tok["access_token"], "set_status", {"row": 2, "status": "Interview",
-                                                                  "confirm": token})
+                                                                  "confirm": token,
+                                                                  "expected_version": prev.structured_content["version"]})
         assert not res.is_error, res.content[0].text
         res = await live.call(tok["access_token"], "export_followups_calendar")
         assert res.is_error and "calendar_events" in res.content[0].text

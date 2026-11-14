@@ -184,7 +184,7 @@ def test_batch_tools_need_one_token(served):
             assert tools["set_statuses"].annotations.read_only_hint is False
             assert tools["add_applications"].input_schema["properties"]["items"]["maxItems"] == 50
 
-            args = {"items": NEW}
+            args = {"items": NEW, "expected_version": t.version()}
             res = await c.call_tool("add_applications", args)
             assert res.is_error and "confirmation" in res.content[0].text
             preview = await c.call_tool("add_applications", {**args, "dry_run": True})
@@ -197,6 +197,7 @@ def test_batch_tools_need_one_token(served):
 
             items = {"items": [{"row": 7, "status": "Отказ", "on": "2026-10-17"}, {"row": 11, "status": "Отозвал"}]}
             preview = await c.call_tool("set_statuses", {**items, "dry_run": True})
+            items["expected_version"] = preview.structured_content["version"]
             token, text = preview.structured_content["confirm"], preview.structured_content["preview"]
             assert "Row 7" in text and "Row 11" in text
             res = await c.call_tool("set_statuses", {**items, "confirm": token})
@@ -219,7 +220,8 @@ def test_batch_asks_once_in_the_clients_dialog(served):
     async def go():
         async with Client(server.mcp, elicitation_callback=dialog) as c:
             res = await c.call_tool("set_statuses", {"items": [{"row": 7, "status": "Отказ"},
-                                                               {"row": 8, "status": "Отказ"}]})
+                                                               {"row": 8, "status": "Отказ"}],
+                                                     "expected_version": t.version()})
             assert not res.is_error
 
     anyio.run(go)
