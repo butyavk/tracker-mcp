@@ -270,8 +270,14 @@ def test_dialog_keeps_text_people_write():
     assert _one_line("a\nb") == "a ⏎ b"
 
 
-def test_debug_shows_the_traceback(tmp_path, monkeypatch):
-    from tracker_mcp.server import main
+def test_debug_shows_the_traceback(monkeypatch):
+    import tracker_mcp.server as server
+
+    def broken(argv):
+        raise PermissionError(13, "denied", "/some/file")
+    monkeypatch.setattr(server, "calendar_cli", broken)
+    with pytest.raises(SystemExit):                 # by default: one line, exit 2
+        server.main(["calendar"])
     monkeypatch.setenv("TRACKER_MCP_DEBUG", "1")
-    with pytest.raises(OSError):
-        main(["new", "/proc/x.xlsx"])
+    with pytest.raises(PermissionError):           # with the switch: the real error, for a bug report
+        server.main(["calendar"])
