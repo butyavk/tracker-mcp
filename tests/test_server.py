@@ -332,3 +332,19 @@ def test_a_cell_cannot_draw_lines_in_the_dialog():
             "changes": [{"row": 2, "field": "status", "old": "Applied", "new": "Rejected\nreally"}]}
     text = server.describe_plan("set_status", plan)
     assert "\nNothing will change" not in text and "Rejected ⏎ really" in text
+
+
+def test_dialog_only_preview_does_not_offer_the_token(t, monkeypatch):
+    monkeypatch.setattr(server, "DIALOG_ONLY", True)
+
+    async def go():
+        async with Client(server.mcp) as c:
+            args = {"row": 7, "status": "Скрининг", "dry_run": True}
+            preview = (await c.call_tool("set_status", args)).structured_content
+            assert "dialog" in preview["next"] and "confirm=<this token>" not in preview["next"]
+
+    anyio.run(go)
+
+
+def test_c1_controls_are_one_line():
+    assert "\x85" not in server._short("Acme\x85Nothing will change")

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.8.2 — 2026-11-14
+
+Fixed
+- The confirmation dialog also shows C1 control characters (U+0080–U+009F, such as U+0085) of a cell as ⏎.
+- With `--dialog-only`, a dry run's «next» says to call again without dry_run so the client asks the user, not to confirm with the token.
+
 ## 0.8.1 — 2026-11-14
 
 Fixed (a second red-team review)

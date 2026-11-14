@@ -271,7 +271,7 @@ def _has_work(plan: dict[str, Any]) -> bool:
 def _one_line(value: Any) -> str:
     """Cell text as one line: a newline or control character in a cell cannot draw fake lines
     into the confirmation dialog («Nothing will change…»)."""
-    return re.sub(r"[\x00-\x1f\x7f\u2028\u2029]+", " ⏎ ", str(value)).strip()
+    return re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+", " ⏎ ", str(value)).strip()
 
 
 def _short(value: Any, limit: int = 120) -> str:
@@ -382,6 +382,11 @@ _NEXT_REMOTE = ("Nothing is written yet. Show the user this preview and stop: en
                 "as the preview.")
 
 
+_NEXT_DIALOG = ("Nothing is written yet. Show the user this preview. This server confirms writes only in the "
+                "client's own dialog (--dialog-only): call the tool again without dry_run, and the client asks the "
+                "user; a confirm token is refused here.")
+
+
 def finish(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], approval: Any, *,
            dry_run: bool, confirm: str | None) -> dict[str, Any]:
     """Tool body: return the preview, or write the approved plan."""
@@ -392,8 +397,8 @@ def finish(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], appro
         return plan
     token = plan_token(plan)
     if dry_run:
-        return {**plan, "confirm": token, "preview": describe_plan(method, plan), "next": _NEXT_REMOTE
-                if _resolver is not None else _NEXT}
+        nxt = _NEXT_DIALOG if DIALOG_ONLY else (_NEXT_REMOTE if _resolver is not None else _NEXT)
+        return {**plan, "confirm": token, "preview": describe_plan(method, plan), "next": nxt}
     if not isinstance(approval, AcceptedElicitation):
         raise ToolError("The user did not confirm; nothing was written.")
     answer = approval.data
