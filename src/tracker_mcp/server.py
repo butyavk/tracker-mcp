@@ -438,6 +438,10 @@ _NEXT_DIALOG = ("Nothing is written yet. Show the user this preview. The write i
                 "own dialog: after the user wants it, call the tool again without dry_run, and the client asks "
                 "them.")
 
+_NEXT_NO_DIALOG = ("Nothing is written: this server confirms writes only in the client's own dialog (--dialog-only), "
+                   "and this client has none. List this change for the user; it is written from a client that asks "
+                   "in a dialog, such as Claude Code or the desktop app.")
+
 
 def finish(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], approval: Any, *,
            dry_run: bool, confirm: str | None) -> dict[str, Any]:
@@ -453,6 +457,8 @@ def finish(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], appro
             return {**plan, "preview": describe_plan(method, plan), "next": _NEXT_READ_ONLY}
         caps = ctx.client_capabilities
         has_dialog = caps is not None and caps.elicitation is not None
+        if DIALOG_ONLY and not has_dialog:   # a token would be refused, and this client has no dialog to ask in
+            return {**plan, "preview": describe_plan(method, plan), "next": _NEXT_NO_DIALOG}
         nxt = (_NEXT_DIALOG if DIALOG_ONLY or has_dialog else (_NEXT_REMOTE if _resolver is not None else _NEXT))
         return {**plan, "confirm": token, "preview": describe_plan(method, plan), "next": nxt}
     if not isinstance(approval, AcceptedElicitation):
@@ -1154,6 +1160,12 @@ def main(argv: list[str] | None = None) -> None:
     line naming it and exit 2, never a traceback."""
     try:
         _main(argv)
+    except BrokenPipeError:   # `tracker-mcp --check | head`: the reader stopped, nothing is wrong
+        try:
+            sys.stdout = open(os.devnull, "w")
+        except OSError:
+            pass
+        os._exit(0)
     except (UnicodeDecodeError, OSError) as e:
         if os.environ.get("TRACKER_MCP_DEBUG"):
             raise   # the full traceback, for a bug report
@@ -1180,7 +1192,9 @@ def _main(argv: list[str] | None = None) -> None:
         prog="tracker-mcp", description="MCP server (stdio) over a job-application tracker.",
         epilog="Getting started: `tracker-mcp init <tracker>` writes a config for your tracker "
                "(.xlsx, .csv or a Google Sheets URL); `tracker-mcp new <file.xlsx>` creates an empty "
-               "tracker with one; `tracker-mcp calendar` writes the follow-ups as an .ics file; "
+               "tracker with one; `tracker-mcp example` prints a config with every key explained; "
+               "`tracker-mcp calendar --tracker <file>` writes the follow-ups as an .ics file; "
+               "`tracker-mcp auth google` signs in to Google Sheets; "
                "`tracker-mcp remote` runs the web server. Environment variables TRACKER_PATH, "
                "TRACKER_CONFIG and TRACKER_BACKUP_DIR work as the options do.")
     parser.add_argument("--tracker", help="the tracker: .xlsx, .csv or a Google Sheets URL (or TRACKER_PATH)")

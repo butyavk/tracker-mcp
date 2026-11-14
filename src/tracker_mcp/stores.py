@@ -268,7 +268,14 @@ class _FileStore:
 _KEPT_PARTS = ("[Content_Types].xml", "_rels/", "docProps/", "xl/workbook.xml", "xl/_rels/", "xl/styles.xml",
                "xl/sharedStrings.xml", "xl/theme/", "xl/worksheets/", "xl/comments", "xl/drawings/", "xl/charts/",
                "xl/media/", "xl/tables/", "xl/externalLinks/", "xl/pivotTables/", "xl/pivotCache/",
-               "xl/calcChain.xml", "xl/printerSettings/", "customXml/")
+               "xl/calcChain.xml", "xl/printerSettings/", "customXml/", "xl/chartsheets/")
+# Of those, what a save loses without harm to the tracker's data: said, never a reason to refuse
+_LOST_HARMLESSLY = {"customXml/": "SharePoint document properties (SharePoint sets them again on upload)",
+                    "xl/printerSettings/": "the printer setup (paper, tray)",
+                    "docProps/thumbnail": "the file's preview picture",
+                    "xl/charts/style": "chart style presets (the charts themselves stay)",
+                    "xl/charts/colors": "chart color presets (the charts themselves stay)",
+                    "xl/persons/": "the list of people from deleted threaded comments"}
 _PART_NAMES = {"xl/threadedComments/": "threaded comments (Excel 365)", "xl/persons/": "threaded comments (Excel 365)",
                "xl/featurePropertyBag/": "checkboxes in cells", "xl/richData/": "pictures or data types in cells",
                "xl/metadata.xml": "dynamic-array formulas", "xl/slicers/": "slicers", "xl/slicerCaches/": "slicers",
@@ -281,7 +288,10 @@ _PART_NAMES = {"xl/threadedComments/": "threaded comments (Excel 365)", "xl/pers
 def _parts_a_save_drops(z: zipfile.ZipFile, names: list[str]) -> list[str]:
     """What an openpyxl save would silently lose from this workbook, in words for the user."""
     out = []
+    threaded = any(n.startswith("xl/threadedComments/") for n in names)
     for n in names:
+        if n.startswith("xl/persons/") and not threaded:
+            continue   # left behind after the last threaded comment was deleted: losing it loses nothing
         if not n.startswith(_KEPT_PARTS):
             what = next((v for k, v in _PART_NAMES.items() if n.startswith(k)), f"the part {n}")
             if what not in out:
@@ -295,18 +305,22 @@ def _parts_a_save_drops(z: zipfile.ZipFile, names: list[str]) -> list[str]:
         out.append("shapes (text boxes, arrows, grouped drawings)")
     if "xfComplement" in text("xl/styles.xml"):
         out.append("checkboxes in cells")
-    if re.search(r"<(?:\w+:)?r>", text("xl/sharedStrings.xml")) or any(
-            re.search(r"<is>\s*<(?:\w+:)?r>", text(n)) for n in names if n.startswith("xl/worksheets/sheet")):
-        out.append("mixed formatting inside a cell (part bold, part plain)")
     return [f"{w} (a save would drop them)" for w in dict.fromkeys(out)]
+
+
+def _parts_lost_harmlessly(names: list[str]) -> list[str]:
+    """What a save drops that holds none of the tracker's data, in words: told, not refused."""
+    return list(dict.fromkeys(v for n in names for k, v in _LOST_HARMLESSLY.items() if n.startswith(k)))
 
 
 class XlsxStore(_FileStore):
     kind = "xlsx"
+    save_drops: list[str] = []
 
     def _parse(self, data: bytes) -> Workbook:
         try:
-            return openpyxl.load_workbook(BytesIO(data))
+            # rich_text: a cell with part of its text bold keeps its runs through a save
+            return openpyxl.load_workbook(BytesIO(data), rich_text=True)
         except (zipfile.BadZipFile, InvalidFileException, KeyError) as e:
             raise TrackerError(f"{self.path.name} is not a readable .xlsx file ({e}). If it was saved "
                                "in another format, save it again as an Excel Workbook (.xlsx).") from e
@@ -326,12 +340,13 @@ class XlsxStore(_FileStore):
         except zipfile.BadZipFile:
             z, names = None, []
         lossy += _parts_a_save_drops(z, names) if z is not None else []
+        self.save_drops = _parts_lost_harmlessly(names)
         if any(n.startswith("xl/media/") for n in names):
             try:
                 import PIL  # noqa: F401
             except ImportError:
-                lossy.append("pictures in the workbook (they would be dropped on save; `pip install pillow` "
-                             "in the server's environment keeps them)")
+                lossy.append("pictures in the workbook (they would be dropped on save: Pillow, which keeps them, "
+                             "is missing from the server's environment; reinstall tracker-mcp 0.8.6 or later)")
         return wb, digest(data), lossy
 
     def _render(self, wb: Workbook) -> bytes:

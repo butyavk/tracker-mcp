@@ -3,7 +3,7 @@
   "name": "io.github.butyavk/tracker-mcp",
   "title": "Job-application tracker",
   "description": "Your job-application tracker in Excel, CSV or Google Sheets: follow-ups, funnel, confirmed writes",
-  "version": "0.8.5",
+  "version": "0.8.6",
   "websiteUrl": "https://butyavk.github.io/tracker-mcp/",
   "repository": {
     "url": "https://github.com/butyavk/tracker-mcp",
@@ -14,7 +14,7 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "tracker-mcp",
-      "version": "0.8.5",
+      "version": "0.8.6",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
@@ -36,6 +36,16 @@
           "name": "TRACKER_BACKUP_DIR",
           "description": "Where backups and the audit log go (default: backups-tracker-mcp next to the tracker)",
           "format": "filepath"
+        },
+        {
+          "name": "TRACKER_READ_ONLY",
+          "description": "1 to refuse every write (previews only), for a server only scheduled runs use",
+          "format": "boolean"
+        },
+        {
+          "name": "TRACKER_DIALOG_ONLY",
+          "description": "1 to accept a write only through the client's own confirmation dialog, never a preview token",
+          "format": "boolean"
         },
         {
           "name": "GOOGLE_APPLICATION_CREDENTIALS",

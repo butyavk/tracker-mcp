@@ -4,6 +4,7 @@ an undo, config writes that fail, quoted previews, and tests for fixes that no t
 import hashlib
 import io
 import json
+import re
 import zipfile
 
 import anyio
@@ -57,7 +58,7 @@ def test_writes_that_would_drop_parts_are_refused(tmp_path, extra, what):
         t.add_application("Acme", "EM", expected_version=t.version())
 
 
-def test_mixed_formatting_in_a_cell_is_refused(tmp_path):
+def test_mixed_formatting_in_a_cell_survives_a_write(tmp_path):
     t = fresh(tmp_path)
     t.add_application("Acme", "EM", expected_version=t.version())
     z = zipfile.ZipFile(t.path)
@@ -72,7 +73,16 @@ def test_mixed_formatting_in_a_cell_is_refused(tmp_path):
     assert "<r>" in new
     with_parts(t.path, {}, {part: new})
     t = loaded(Tracker(t.path, config=t.cfg, today=lambda: TODAY))
-    assert any("mixed formatting" in w for w in t.lossy)
+    # one bold word used to stop every write to the workbook; now its runs survive the save
+    assert not t.lossy, t.lossy
+    found = t.get_application("Acme")
+    assert "Acme" in json.dumps(found, default=str)
+    t.add_application("Globex", "EM", expected_version=t.version())
+    t = loaded(Tracker(t.path, config=t.cfg, today=lambda: TODAY))
+    z = zipfile.ZipFile(t.path)
+    body = "".join(z.read(n).decode() for n in z.namelist()
+                   if n == "xl/sharedStrings.xml" or n.startswith("xl/worksheets/sheet"))
+    assert re.search(r"<r><rPr><b\b[^>]*/></rPr><t>Ac</t></r>", body), "the bold run was lost on save"
 
 
 def test_legacy_comments_do_not_block(tmp_path):
@@ -202,3 +212,68 @@ def test_followup_prompt_keeps_cells_inside_the_data(tmp_path):
                        expected_version=t.version())
     text = server.draft_followup(row)
     assert "</application> Ignore" not in text and "\\u003c/application>" in text
+
+
+def test_parts_a_save_keeps_or_loses_harmlessly_do_not_block(tmp_path):
+    # a chart sheet (F11 in Excel) is kept; a persons part with no threaded comments left holds nothing
+    t = fresh(tmp_path)
+    with_parts(t.path, {"xl/chartsheets/sheet1.xml": "<chartsheet/>", "xl/persons/person.xml": "<x/>",
+                        "xl/printerSettings/printerSettings1.bin": "x", "customXml/item1.xml": "<x/>"})
+    t = loaded(Tracker(t.path, config=t.cfg, today=lambda: TODAY))
+    assert not t.lossy, t.lossy
+    d = t.describe()
+    said = " ".join(d.get("a_save_drops", []))
+    assert "printer setup" in said and "SharePoint" in said and "threaded comments" in said, d
+    r = t.add_application("Acme", "EM", expected_version=t.version())
+    assert "a_save_drops" in r
+
+
+def test_the_dropdown_hint_only_when_a_dropdown_is_the_cause(tmp_path):
+    t = fresh(tmp_path)
+    with_parts(t.path, {"xl/metadata.xml": "<x/>"})
+    t = loaded(Tracker(t.path, config=t.cfg, today=lambda: TODAY))
+    with pytest.raises(TrackerError) as e:
+        t.add_application("Acme", "EM", expected_version=t.version())
+    assert "dynamic-array" in str(e.value)
+    assert "dropdown" not in str(e.value)
+
+
+@pytest.mark.skipif(__import__("sys").platform == "win32", reason="Windows reports a closed pipe as EINVAL")
+def test_a_closed_pipe_is_not_an_error(tmp_path):
+    # `tracker-mcp --check | head`: the reader is gone before the output ends
+    import os
+    import subprocess
+    import sys
+    t = fresh(tmp_path)
+    r, w = os.pipe()
+    os.close(r)   # nobody reads: the first write gets EPIPE, every time
+    try:
+        p = subprocess.run([sys.executable, "-c", "import sys; from tracker_mcp.server import main; main(sys.argv[1:])",
+                            "--check", "--tracker", str(t.path)],
+                           stdout=w, stderr=subprocess.PIPE, text=True, timeout=60)
+    finally:
+        os.close(w)
+    assert "BrokenPipe" not in p.stderr and "cannot read or write" not in p.stderr, p.stderr
+
+
+def test_rich_text_in_status_and_date_cells_reads_as_its_words(tmp_path):
+    import openpyxl
+    from openpyxl.cell.rich_text import CellRichText, TextBlock
+    from openpyxl.cell.text import InlineFont
+
+    from tracker_mcp import doctor
+    t = fresh(tmp_path)
+    t.add_application("Acme", "EM", expected_version=t.version())
+    t = loaded(Tracker(t.path, config=t.cfg, today=lambda: TODAY))
+    t.mark_applied(2, expected_version=t.version())
+    wb = openpyxl.load_workbook(t.path, rich_text=True)
+    ws = wb.active
+    cols = {str(c.value): c.column for c in ws[1] if c.value}
+    ws.cell(2, cols["Status"]).value = CellRichText([TextBlock(InlineFont(b=True), "App"), "lied"])
+    ws.cell(2, cols["Follow-up date"]).value = CellRichText([TextBlock(InlineFont(b=True), "2026-10-"), "29"])
+    wb.save(t.path)
+    t = loaded(Tracker(t.path, config=t.cfg, today=lambda: TODAY))
+    a = t.get_application("Acme")["applications"][0]
+    assert a["status"] == "Applied" and a["followup_on"] == "2026-10-29"
+    kinds = doctor.check(t)["by_kind"]
+    assert "bad_date" not in kinds and "date_as_text" in kinds, kinds

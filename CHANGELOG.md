@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.8.6 — 2026-11-14
+
+Fixed (an end-to-end review)
+- A cell with part of its text bold no longer stops every write to the workbook: the workbook is read with its rich text, the formatting survives a save, and tools read the words as plain text. A cell the server writes to becomes plain text.
+- Pillow is now a dependency, so pictures in a workbook (a logo, a sheet background) are kept, also for `uvx` and the desktop extension, where it could not be added by hand.
+- 0.8.5 said the list was of what a save keeps; a few parts on it are in fact dropped. They hold none of the tracker's data and are now named under `a_save_drops` in `describe_tracker` and in each write's result: SharePoint document properties, the printer setup, the file's preview picture, chart style and color presets, and the people list left after the last threaded comment is deleted. README «Known limits» lists them, and what a save loses inside the sheets.
+- A chart on its own sheet (F11 in Excel) no longer refuses writes: a save keeps it.
+- The people list of threaded comments refuses writes only while threaded comments are there.
+- A refusal says «a dropdown that takes its list from another sheet» only when a dropdown is the cause.
+- With `--dialog-only` and a client that has no dialog, a preview no longer offers a token that would be refused; it says the change is written from a client that asks in a dialog.
+- The desktop extension's Read-only setting no longer suggests a second copy beside the read-write one (every chat sees every connected extension).
+- `tracker-mcp --check | head` exits quietly; `--help` names `example` and `auth`; the README says which writes take `dry_run`; server.json offers TRACKER_READ_ONLY and TRACKER_DIALOG_ONLY.
+
 ## 0.8.5 — 2026-11-14
 
 Fixed (a fourth review)

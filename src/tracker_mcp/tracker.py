@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any
 
 from openpyxl.cell.cell import MergedCell
+from openpyxl.cell.rich_text import CellRichText
 from openpyxl.utils import get_column_letter
 from openpyxl.workbook.workbook import Workbook
 from openpyxl.worksheet.cell_range import MultiCellRange
@@ -55,6 +56,8 @@ def parse_date(value: Any, formats: tuple[str, ...] | list[str] = ()) -> date | 
     dd.mm.yyyy, and whatever `formats` (strptime patterns from the config) add."""
     if value is None:
         return None
+    if isinstance(value, CellRichText):   # a date typed with part of it bold is still the date
+        value = str(value)
     if isinstance(value, datetime):
         return value.date()
     if isinstance(value, date):
@@ -239,6 +242,8 @@ class Tracker:
 
     def _show(self, value: Any, key: str = "") -> Any:
         """Cell value -> JSON-friendly value."""
+        if isinstance(value, CellRichText):   # part of the text bold: the words, as one string
+            value = str(value)
         if self.cfg.is_date(key):
             d = self._date(value)
             if d:
@@ -410,6 +415,7 @@ class Tracker:
             **({"date_formats": self.cfg.values.date_formats} if self.cfg.values.date_formats else {}),
             **({"unavailable_tools": u} if (u := self.unavailable()) else {}),
             **({"writes_blocked": self.lossy} if self.lossy else {}),
+            **({"a_save_drops": d} if (d := getattr(self.store, "save_drops", None)) else {}),
             "version": version,
         }
         return out
@@ -1292,8 +1298,10 @@ class Tracker:
         if self.lossy and not dry_run:
             raise TrackerError("Writes are off for this workbook: openpyxl, which the server writes with, "
                                "cannot keep some of its Excel features and would drop them on save: "
-                               f"{'; '.join(self.lossy)}. A common cause is a dropdown that takes its list "
-                               "from another sheet, saved by newer Excel. Reading works as usual.")
+                               f"{'; '.join(self.lossy)}."
+                               + (" A common cause is a dropdown that takes its list from another sheet, saved by "
+                                  "newer Excel." if any("Data Validation" in w for w in self.lossy) else "")
+                               + " Reading works as usual.")
         if expected_version and expected_version != before:
             raise ConflictError(f"The tracker changed since you read it (now {before}, "
                                 f"you had {expected_version}). Re-read and retry.")
@@ -1307,6 +1315,8 @@ class Tracker:
             result["warnings"] = more[0]
         if self.lossy:
             result["warning"] = f"This workbook cannot be written: {'; '.join(self.lossy)}"
+        elif (drops := getattr(self.store, "save_drops", None)) and changes:
+            result["a_save_drops"] = drops   # nothing of the tracker's data; said so nobody is surprised
         if dry_run or not changes:
             result["version"] = before
             if not changes:

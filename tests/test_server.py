@@ -273,7 +273,9 @@ def test_dialog_only_refuses_the_token(t, monkeypatch):
         async with Client(server.mcp) as c:
             args = {"row": 7, "status": "Скрининг"}
             preview = (await c.call_tool("set_status", {**args, "dry_run": True})).structured_content
-            res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "confirm": preview["confirm"],
+            assert "confirm" not in preview          # this client has no dialog: a token would only be refused
+            token = server.plan_token({k: v for k, v in preview.items() if k not in ("preview", "next")})
+            res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "confirm": token,
                                                    "expected_version": preview["version"]})
             assert res.is_error and "dialog" in res.content[0].text
             assert status_of(t, 7) == "Подана"
@@ -344,6 +346,7 @@ def test_dialog_only_preview_does_not_offer_the_token(t, monkeypatch):
             args = {"row": 7, "status": "Скрининг", "dry_run": True}
             preview = (await c.call_tool("set_status", args)).structured_content
             assert "dialog" in preview["next"] and "confirm=<this token>" not in preview["next"]
+            assert "confirm" not in preview and "has none" in preview["next"]
 
     anyio.run(go)
 

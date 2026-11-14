@@ -364,7 +364,8 @@ It never touches events without an id line. The server itself does not sign in t
 your calendar.
 
 Read tools are marked read-only. Writes are marked destructive where they
-overwrite cells, and all of them take `dry_run`, `expected_version` and `confirm`.
+overwrite cells, and all tracker writes take `dry_run`, `expected_version` and `confirm`
+(`export_followups_calendar` writes only its .ics file and takes `days`).
 
 ## How a write stays safe
 
@@ -508,7 +509,19 @@ bracket or dash ("Ashby (direct form)" → "Ashby"), or by substrings you list i
 - openpyxl cannot keep some parts of newer Excel files, such as dropdowns that take
   their list from another sheet and are stored in an extension. If loading the file
   warns that a part would be removed, the server refuses writes to that workbook
-  rather than drop it, and says so. Reading works.
+  rather than drop it, and says so. Reading works. The same holds for parts openpyxl
+  never reads: threaded comments, checkboxes in cells, shapes, slicers, timelines,
+  form and ActiveX controls, embedded objects, macros, data connections, query
+  tables, add-ins and dynamic-array formulas refuse writes; `describe_tracker` lists
+  them under `writes_blocked`.
+- A few parts are dropped by a save without harm to the tracker's data, and are
+  named under `a_save_drops` (in `describe_tracker` and in each write's result):
+  SharePoint document properties, the printer setup, the file's preview picture,
+  chart style and color presets, and the people list left after the last threaded
+  comment is deleted. Inside the sheets, custom sheet views, protected ranges,
+  ignored-error marks and fonts in old-style comments are not kept either.
+- A cell with part of its text bold keeps its formatting; a cell the server writes
+  to becomes plain text. Pictures are kept with Pillow, which tracker-mcp installs.
 - openpyxl drops cached formula values; the server asks Excel to recalculate on open.
 - In a CSV file, text the server writes that starts like a formula (`=`, `+`, `@`,
   `-1…`) gets a leading apostrophe, so Excel shows it as text.
