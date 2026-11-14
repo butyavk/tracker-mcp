@@ -41,7 +41,7 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .config import Config, load_config_file, parse_config, with_column
-from .stores import ConflictError, Store, TrackerError, UnverifiedWrite, backup_path, open_store
+from .stores import ConflictError, Store, TrackerError, UnverifiedWrite, backup_path, backup_pattern, open_store
 
 __all__ = ["ConflictError", "Tracker", "TrackerError", "dropdown_values", "parse_date"]
 
@@ -1254,7 +1254,8 @@ class Tracker:
         cfg_backup = str(entry.get("config_backup") or "")
         if cfg_file or cfg_backup:   # add_column: only this tracker's own config, from a backup in its folder
             if self.config_file is None or Path(cfg_file or "").resolve() != Path(self.config_file).resolve() \
-                    or not cfg_backup or Path(cfg_backup).name != cfg_backup:
+                    or not cfg_backup or Path(cfg_backup).name != cfg_backup \
+                    or not backup_pattern(Path(self.config_file).name + ".before-add-column", "").fullmatch(cfg_backup):
                 raise TrackerError("That write's audit line names another config file or a backup outside the "
                                    f"backup folder; undo refuses it. Restore by hand from {entry['backup']}.")
         if not self._owns(str(entry["backup"])):
@@ -1365,7 +1366,12 @@ class Tracker:
             return False
         if name == self.store.label or name == self._identity():
             return True
-        if getattr(self.store, "path", None) is not None and not name.startswith("Google Sheet "):
+        path = getattr(self.store, "path", None)
+        if path is not None and not name.startswith("Google Sheet "):
+            if name.startswith(("\\\\", "//")) or "\x00" in name:
+                return False   # a network or broken name is never resolved: it could reach another machine
+            if Path(name).name not in (Path(path).name, Path(path).resolve().name):
+                return False   # another file name: not this tracker, and nothing to look up
             try:   # os.path.expanduser leaves «~nosuchuser» as it is; Path.expanduser would raise
                 return str(Path(os.path.expanduser(name)).resolve()) == self._identity()
             except (OSError, ValueError, RuntimeError):

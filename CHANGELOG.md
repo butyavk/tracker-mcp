@@ -2,14 +2,14 @@
 
 ## 0.8.4 — 2026-11-14
 
-Fixed (a sweep for the kinds of error the fifth review found)
-- The same tracker reached by another path (relative, `~`, a link) keeps its undo history: audit lines name the resolved file, and older lines written under another spelling of the path still count.
-- Two servers that open the same file through different paths take the same lock (it sits next to the real file).
+Fixed (a sweep for the kinds of error the fifth review found, and an independent check of it)
+- Undo of add_column restores only this config's own backup (`<config>.before-add-column.<time>`): a forged audit line can no longer make it copy another file from the backup folder into the config. This hole was in 0.8.3.
+- One tracker, one history, by whatever path it is reached (relative, `~`, a link with any name, a linked folder): writes replace the real file and leave a link a link; the lock, the backups (named after the real file) and the audit sit next to the real file; audit lines name the resolved file, and older lines written under another spelling of the path still count. Backups made before 0.8.4 next to a link stay there. Excel's lock file is looked for beside the link and beside the real file.
+- Audit text is never used to reach another machine: network names (`\\host\…`, `//host/…`) and names of other files are not resolved; an odd line (`~nosuchuser/…`, a NUL) belongs to nobody and never stops undo.
 - A store that cannot say whether a backup is its own owns none, so undo refuses rather than guesses.
-- Every piece of text in a confirmation dialog that can come from the file or the request — column names, config lines, field names, warnings — is shown on one line, not only the undo dialog's fields. The cleaner works by Unicode category (controls, format characters such as bidi marks, zero-width characters, the soft hyphen and the BOM, line separators, private-use and unassigned characters), not by a list.
-- A write through a symlinked tracker replaces the real file and leaves the link a link; backups and the audit sit next to the real file, so every path to it shares one history (an existing backup folder next to a link is kept).
-- An odd audit line (such as `~nosuchuser/…`) no longer stops undo or recent_writes.
-- Every command line (`init`, `new`, `calendar`, `--check`) answers a file it cannot read or write with one line naming it, exit 2, never a traceback.
+- Every piece of text in a confirmation dialog that can come from the file or the request (column names, config lines, field names, warnings) is one line. A control or line separator shows as ⏎; characters that can hide or reorder text (bidi marks, zero-width spaces, the soft hyphen, the BOM, stray tag letters) are dropped; the joiners that emoji, Persian and Hindi need, flag tags and characters newer than the server's Unicode stay as written.
+- Every command line (`init`, `new`, `calendar`, `--check`) answers a file it cannot read or write with one line naming it, exit 2; a config that is not UTF-8 is named. `TRACKER_MCP_DEBUG=1` shows the full traceback for a bug report.
+- A test holds the set of write tools; job-search-kit lists the same set as the tools a desktop task keeps on «ask», and its own test compares the two.
 
 ## 0.8.3 — 2026-11-14
 

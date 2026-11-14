@@ -163,7 +163,11 @@ def load_config(tracker: str | Path, explicit: str | Path | None = None) -> Conf
 
 
 def load_config_file(path: Path) -> Config:
-    return parse_config(path.read_text(encoding="utf-8"), str(path))
+    try:
+        text = path.read_text(encoding="utf-8")
+    except UnicodeDecodeError as e:
+        raise ConfigError(f"{path}: not UTF-8 text ({e.reason} at byte {e.start}); save it as UTF-8") from e
+    return parse_config(text, str(path))
 
 
 def parse_config(text: str, where: str = "config") -> Config:

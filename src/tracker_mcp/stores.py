@@ -170,13 +170,10 @@ class _FileStore:
     def __init__(self, path: str | Path, backup_dir: str | Path | None = None):
         self.path = Path(path).expanduser()
         self.label = str(self.path)
-        if backup_dir:
-            self.backup_dir = Path(backup_dir).expanduser()
-        else:   # next to the real file, so every path to it shares one history; an existing
-            # folder next to a link (made before 0.8.4) is kept, so its undo history stays
-            by_real = self.path.resolve().parent / "backups-tracker-mcp"
-            by_link = self.path.parent / "backups-tracker-mcp"
-            self.backup_dir = by_link if by_link.is_dir() and not by_real.is_dir() else by_real
+        # backups and the audit live by the real file, under its name, so every path to it (a link,
+        # a relative path, `~`) shares one history; backups made before 0.8.4 next to a link stay there
+        self.backup_dir = (Path(backup_dir).expanduser() if backup_dir
+                           else self.path.resolve().parent / "backups-tracker-mcp")
 
     def _bytes(self) -> bytes:
         if not self.path.exists():
@@ -187,10 +184,12 @@ class _FileStore:
         return digest(self._bytes())
 
     def check_writable(self) -> None:
-        for lock in (f"~${self.path.name}", f".~lock.{self.path.name}#"):
-            if (self.path.parent / lock).exists():
-                raise ConflictError(f"The tracker is open in Excel/LibreOffice (lock file {lock}). "
-                                    "Close it and retry; if it is closed, the lock file is stale.")
+        real = self.path.resolve()   # Excel puts its lock file beside the file it opened: the link or the real one
+        for folder, name in {(self.path.parent, self.path.name), (real.parent, real.name)}:
+            for lock in (f"~${name}", f".~lock.{name}#"):
+                if (folder / lock).exists():
+                    raise ConflictError(f"The tracker is open in Excel/LibreOffice (lock file {lock}). "
+                                        "Close it and retry; if it is closed, the lock file is stale.")
 
     def _render(self, wb: Workbook) -> bytes:
         raise NotImplementedError
@@ -207,7 +206,8 @@ class _FileStore:
         return Path(name)
 
     def owns_backup(self, name: str) -> bool:
-        return bool(backup_pattern(self.path.stem, self.path.suffix).fullmatch(name))
+        real = self.path.resolve()   # by the real file's name; a link's own name for older backups
+        return any(backup_pattern(p.stem, p.suffix).fullmatch(name) for p in {real, self.path})
 
     def _replace(self, tmp: Path) -> None:
         try:
@@ -253,9 +253,10 @@ class _FileStore:
 
     def _backup(self) -> Path:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
-        dst = backup_path(self.backup_dir, self.path.stem, self.path.suffix)
+        real = self.path.resolve()
+        dst = backup_path(self.backup_dir, real.stem, real.suffix)
         shutil.copy2(self.path, dst)
-        pat = backup_pattern(self.path.stem, self.path.suffix)
+        pat = backup_pattern(real.stem, real.suffix)
         old = sorted(p for p in self.backup_dir.iterdir() if pat.fullmatch(p.name))
         for p in old[:-KEEP_BACKUPS]:
             p.unlink()

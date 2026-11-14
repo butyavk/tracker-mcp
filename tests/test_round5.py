@@ -191,7 +191,8 @@ def test_cli_names_an_unreadable_file(tmp_path, capsys):
     with pytest.raises(SystemExit) as ex:
         main(["calendar", "--tracker", str(path), "--config", str(bad)])
     assert ex.value.code == 2
-    assert "cannot read" in capsys.readouterr().err
+    err = capsys.readouterr().err
+    assert str(bad) in err and "UTF-8" in err   # the file is named
 
 
 def test_write_tools_are_the_ones_the_kit_lists():
@@ -205,3 +206,72 @@ def test_write_tools_are_the_ones_the_kit_lists():
     assert writes == {"add_application", "add_applications", "add_column", "close_stale", "edit_application",
                       "export_followups_calendar", "fix_tracker", "log_followup", "mark_applied",
                       "reschedule_followup", "set_status", "set_statuses", "undo_last_write"}
+
+
+def test_undo_restores_only_this_configs_own_backup(tmp_path):
+    t = fresh(tmp_path)
+    t.add_column("Gate", field="gate", expected_version=t.version())   # a mapped field: the config changes
+    log = t.backup_dir / "audit.jsonl"
+    lines = log.read_text(encoding="utf-8").splitlines()
+    entry = json.loads(lines[-1])
+    assert entry.get("config_backup")
+    (t.backup_dir / "audit.jsonl.copy").write_text("x", encoding="utf-8")
+    for foreign in ("audit.jsonl", "jobs.2025.tracker-mcp.toml.before-add-column.20261114-101010-000001",
+                    "audit.jsonl.copy"):
+        entry["config_backup"] = foreign
+        log.write_text("\n".join(lines[:-1] + [json.dumps(entry)]) + "\n", encoding="utf-8")
+        with pytest.raises(TrackerError):
+            t.undo_last_write(dry_run=True)
+
+
+def test_a_link_with_another_name_shares_undo_with_the_real_file(tmp_path):
+    t = fresh(tmp_path)
+    (tmp_path / "else").mkdir()
+    link = tmp_path / "else" / "linked.xlsx"
+    link.symlink_to(t.path)
+    via = Tracker(link, config=t.cfg, today=lambda: TODAY)
+    via.add_application("Acme", "EM", expected_version=via.version())
+    real = Tracker(t.path, config=t.cfg, today=lambda: TODAY)
+    assert real.undo_last_write(dry_run=True)["would_undo"]
+    assert not (tmp_path / "else" / "backups-tracker-mcp").exists()
+
+
+def test_older_audit_lines_under_another_spelling_count(tmp_path):
+    t = fresh(tmp_path)
+    t.add_application("Acme", "EM", expected_version=t.version())
+    log = t.backup_dir / "audit.jsonl"
+    e = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
+    e["tracker"] = str(tmp_path / "." / "jobs.xlsx")          # how 0.8.3 might have written it
+    extra = [dict(e, tracker="\\\\host\\share\\jobs.xlsx"), dict(e, tracker="//host/share/jobs.xlsx"),
+             dict(e, tracker="jobs\x00.xlsx")]
+    log.write_text("\n".join(json.dumps(x) for x in [e, *extra]) + "\n", encoding="utf-8")
+    writes = t.recent_writes()["writes"]
+    assert len(writes) == 1                                     # the spelled-differently one; not the others
+
+
+def test_excel_lock_beside_the_real_file_is_seen_through_a_link(tmp_path):
+    t = fresh(tmp_path)
+    (tmp_path / "else").mkdir()
+    link = tmp_path / "else" / "linked.xlsx"
+    link.symlink_to(t.path)
+    (tmp_path / "~$jobs.xlsx").write_text("", encoding="utf-8")
+    via = Tracker(link, config=t.cfg, today=lambda: TODAY)
+    with pytest.raises(TrackerError):
+        via.add_application("Acme", "EM", expected_version=via.version())
+
+
+def test_dialog_keeps_text_people_write():
+    from tracker_mcp.server import _one_line
+    for text in ("👨‍👩‍👧", "🏳️‍🌈", "\U0001F3F4\U000E0067\U000E0062\U000E0073\U000E0063\U000E0074\U000E007F",
+                 "می‌خواهم", "क्‌ष", "\U0001FAE9 tired", "Café — «ok»"):
+        assert _one_line(text) == text, repr(text)
+    for text in ("a‮b", "a​b", "a\U000E0069b", "a­b", "a﻿b"):
+        assert _one_line(text) == "ab", repr(text)
+    assert _one_line("a\nb") == "a ⏎ b"
+
+
+def test_debug_shows_the_traceback(tmp_path, monkeypatch):
+    from tracker_mcp.server import main
+    monkeypatch.setenv("TRACKER_MCP_DEBUG", "1")
+    with pytest.raises(OSError):
+        main(["new", "/proc/x.xlsx"])

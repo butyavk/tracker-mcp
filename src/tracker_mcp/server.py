@@ -277,18 +277,30 @@ def _has_work(plan: dict[str, Any]) -> bool:
 
 def _one_line(value: Any) -> str:
     """Cell text as one line: a newline or control character in a cell cannot draw fake lines
-    into the confirmation dialog («Nothing will change…»). By Unicode category, not a list: every
-    control (Cc), format (Cf: bidi, zero-width, soft hyphen, BOM), line and paragraph separator
-    (Zl, Zp), private-use or unassigned character is shown as ⏎."""
-    out, gap = [], False
+    into the confirmation dialog («Nothing will change…»). By Unicode category, not a list: a
+    control or line/paragraph separator shows as ⏎; format characters that can hide or reorder
+    text (bidi marks, zero-width spaces, the soft hyphen, the BOM, stray tag letters) are dropped;
+    the joiners that emoji, Persian and Hindi need (ZWJ, ZWNJ) and a flag's own tags stay."""
+    out, gap, in_flag = [], False, False
     for ch in str(value):
-        if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp", "Co", "Cn", "Cs"):
+        cat, cp = unicodedata.category(ch), ord(ch)
+        if cat in ("Cc", "Zl", "Zp", "Cs"):          # a break of any kind: one visible mark
             if not gap:
                 out.append(" ⏎ ")
-            gap = True
+            gap, in_flag = True, False
+            continue
+        gap = False
+        if cp == 0x1F3F4:                           # a flag such as Scotland's: tag letters follow it
+            in_flag = True
+        elif 0xE0020 <= cp <= 0xE007F:              # tag characters: only inside such a flag
+            if not in_flag:
+                continue
+        elif cat == "Cf" and cp not in (0x200C, 0x200D):   # bidi, zero-width, soft hyphen, BOM: dropped
+            in_flag = False
+            continue
         else:
-            out.append(ch)
-            gap = False
+            in_flag = in_flag and cat == "Mn"
+        out.append(ch)
     return "".join(out).strip()
 
 
@@ -1122,6 +1134,8 @@ def main(argv: list[str] | None = None) -> None:
     try:
         _main(argv)
     except (UnicodeDecodeError, OSError) as e:
+        if os.environ.get("TRACKER_MCP_DEBUG"):
+            raise   # the full traceback, for a bug report
         name = getattr(e, "filename", None)
         what = f"{name}: " if name else ""
         print(f"tracker-mcp: cannot read or write {what}{type(e).__name__}: {e}", file=sys.stderr)
