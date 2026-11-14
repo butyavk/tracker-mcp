@@ -299,11 +299,13 @@ def describe_plan(tool: str, plan: dict[str, Any]) -> str:
             text += f" The config {_short(e.get('config_file'))} loses the line {_short(e['config_line'])}."
     elif tool == "add_column":
         col = plan.get("column", {})
-        where = (plan.get("layout") or ["a new column"])[0]
+        # every piece of text that can come from the file or the request is one line, so a header
+        # with a line break cannot draw a fake line into the dialog
+        where = _one_line((plan.get("layout") or ["a new column"])[0])
         lines = [f"add_column: add {where}" + (" (dates)" if col.get("kind") == "date" else "") + "?"]
         if col.get("config_line"):
-            lines.append(f"Config, [columns]: + {col['config_line']}")
-        lines += [f"Also: {n}" for n in (plan.get("layout") or [])[1:]]
+            lines.append(f"Config, [columns]: + {_one_line(col['config_line'])}")
+        lines += [f"Also: {_one_line(n)}" for n in (plan.get("layout") or [])[1:]]
         text = "\n".join(lines)
     else:
         labels = plan.get("labels", {})
@@ -314,13 +316,14 @@ def describe_plan(tool: str, plan: dict[str, Any]) -> str:
                 if str(ch["row"]) != str(row):
                     continue
                 old, new = ch["old"], ch["new"]
+                field = _short(ch["field"])
                 if old not in (None, "") and str(old) == str(new):
-                    lines.append(f"  {ch['field']}: «{_short(old)}» (text) → {_short(new)} (a date)")
+                    lines.append(f"  {field}: «{_short(old)}» (text) → {_short(new)} (a date)")
                 elif isinstance(old, str) and isinstance(new, str) and old and new.startswith(old):
-                    lines.append(f"  {ch['field']}: + {_short(new[len(old):].lstrip(' |'))}")
+                    lines.append(f"  {field}: + {_short(new[len(old):].lstrip(' |'))}")
                 else:
-                    lines.append(f"  {ch['field']}: {_short(old)} → {_short(new)}")
-        lines += [f"\n⚠ {w}" for w in plan.get("warnings", [])]
+                    lines.append(f"  {field}: {_short(old)} → {_short(new)}")
+        lines += [f"\n⚠ {_one_line(w)}" for w in plan.get("warnings", [])]
         text = "\n".join(lines)
     return f"{text}\n\n(plan {plan_token(plan)})"
 

@@ -57,3 +57,9 @@ claude.ai/directory/manage. It starts the published package with
 `uvx tracker-mcp==<version>`. `plugin/pyproject.toml` and `plugin/uv.lock` list every
 dependency with its exact version and hash, for the directory's checks. Check the
 plugin with `claude plugin validate ./plugin`.
+
+## Habits that keep old mistakes from coming back
+- Identify a file by its resolved path, not by how it was spelled; a lock, an audit line and a backup name all follow that.
+- Where a check guards a write, name what is allowed and refuse the rest; a default that cannot tell refuses.
+- Text that reaches the confirmation dialog from a cell, a header, a config line or a request goes through `_one_line` or `_short`, every piece of it.
+- Every CHANGELOG line has a test that runs the code; a new test is first seen failing on the old code.

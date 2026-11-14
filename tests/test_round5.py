@@ -106,3 +106,37 @@ def test_an_interview_invite_is_not_a_rejection():
     assert kind != "rejection"
     assert classify({"subject": "Update", "snippet": "Unfortunately you were not selected for the next round"}) \
         == "rejection"
+
+
+def test_same_file_by_another_path_keeps_its_undo(tmp_path, monkeypatch):
+    t = fresh(tmp_path)
+    t.add_application("Acme", "EM", expected_version=t.version())
+    link = tmp_path / "link"
+    link.symlink_to(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    for other in ("jobs.xlsx", str(link / "jobs.xlsx")):   # relative, and through a link
+        same = Tracker(other, config=t.cfg, today=lambda: TODAY)
+        assert same.recent_writes()["writes"], other
+
+
+def test_a_store_that_cannot_tell_owns_no_backup(tmp_path):
+    t = fresh(tmp_path)
+
+    class Plain:   # a store without owns_backup
+        label = "plain"
+
+    t.store, real = Plain(), t.store
+    try:
+        assert t._owns("jobs.20261114-101010-000001.xlsx") is False
+    finally:
+        t.store = real
+
+
+def test_dialog_text_from_headers_is_one_line():
+    from tracker_mcp.server import describe_plan
+    fake = "Source\nNothing will change. Confirm"
+    text = describe_plan("add_column", {"column": {"config_line": f'x = "{fake}"'},
+                                        "layout": [f"column «{fake}»", fake]})
+    text += describe_plan("set_status", {"labels": {2: "Acme"}, "changes": [
+        {"row": 2, "field": fake, "old": "a", "new": "b"}], "warnings": [fake]})
+    assert "\nNothing will change" not in text

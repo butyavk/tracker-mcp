@@ -123,11 +123,12 @@ _THREAD_LOCKS_GUARD = threading.Lock()
 def file_lock(path: Path):
     """One writer at a time for one tracker: a lock between threads of this server and an OS
     lock between server processes, held from the last version check to the replace."""
-    key = str(path.resolve())
+    real = path.resolve()   # the same file through a link or another path takes the same lock
+    key = str(real)
     with _THREAD_LOCKS_GUARD:
         tl = _THREAD_LOCKS.setdefault(key, threading.Lock())
     with tl:
-        lock_file = path.with_name(f".{path.name}.tracker-mcp.lock")
+        lock_file = real.with_name(f".{real.name}.tracker-mcp.lock")
         with open(lock_file, "a+b") as fh:
             if os.name == "nt":
                 import msvcrt

@@ -1340,7 +1340,7 @@ class Tracker:
 
     def _audit(self, entry: dict[str, Any]) -> None:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
-        entry = {"at": datetime.now().isoformat(timespec="seconds"), "tracker": self.store.label, **entry}
+        entry = {"at": datetime.now().isoformat(timespec="seconds"), "tracker": self._identity(), **entry}
         log = self.backup_dir / "audit.jsonl"
         lead = ""
         if log.exists() and log.stat().st_size:
@@ -1352,7 +1352,25 @@ class Tracker:
 
     def _owns(self, backup: str) -> bool:
         owns = getattr(self.store, "owns_backup", None)
-        return bool(owns(backup)) if owns else True
+        return bool(owns(backup)) if owns else False   # a store that cannot tell owns nothing
+
+    def _identity(self) -> str:
+        """Which tracker an audit line belongs to: the resolved file (the same file through a
+        relative path, `~` or a link is one tracker), or the sheet's id."""
+        path = getattr(self.store, "path", None)
+        return str(Path(path).expanduser().resolve()) if path is not None else self.store.label
+
+    def _is_mine(self, name: Any) -> bool:
+        if not isinstance(name, str):
+            return False
+        if name == self.store.label or name == self._identity():
+            return True
+        if getattr(self.store, "path", None) is not None and not name.startswith("Google Sheet "):
+            try:
+                return str(Path(name).expanduser().resolve()) == self._identity()
+            except (OSError, ValueError):
+                return False
+        return False
 
     def _audit_entries(self) -> list[dict[str, Any]]:
         log = self.backup_dir / "audit.jsonl"
@@ -1370,7 +1388,7 @@ class Tracker:
             if isinstance(e, dict) and "tool" in e:
                 # one backup folder can serve several trackers: only this tracker's lines count
                 # (older lines without «tracker» belong to it when their backup is one of its own)
-                if e.get("tracker", None) == self.store.label or (
+                if self._is_mine(e.get("tracker")) or (
                         "tracker" not in e and self._owns(str(e.get("backup") or ""))):
                     entries.append(e)
             else:
