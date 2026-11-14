@@ -93,8 +93,8 @@ def test_write_asks_the_user_when_the_client_has_a_dialog(t, answer, mode):
             return res
 
     res = anyio.run(go)
-    assert "Row 7 · Globex" in seen[0] and "status: Подана → Отказ" in seen[0]
-    assert "response: ∅ → 18.10: template" in seen[0]
+    assert "Row 7 · «Globex" in seen[0] and "status: «Подана» → «Отказ»" in seen[0]
+    assert "response: ∅ → «18.10: template" in seen[0]
     if answer == "accept":
         assert not res.is_error and status_of(t, 7) == "Отказ"
     else:

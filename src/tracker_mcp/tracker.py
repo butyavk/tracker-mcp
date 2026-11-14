@@ -1260,6 +1260,9 @@ class Tracker:
                                    f"backup folder; undo refuses it. Restore by hand from {entry['backup']}.")
         if not self._owns(str(entry["backup"])):
             raise TrackerError(f"«{entry['backup']}» is not a backup of this tracker; undo refuses it.")
+        if cfg_backup and not (self.backup_dir / cfg_backup).exists():   # checked before anything is restored
+            raise TrackerError(f"The config backup {cfg_backup} of that write is gone; undo would leave a config "
+                               "that maps a removed column. Nothing restored.")
         if entry.get("config_after") and cfg_file:
             now = Path(cfg_file).read_bytes() if Path(cfg_file).exists() else b""
             if hashlib.sha256(now).hexdigest() != entry["config_after"]:
@@ -1270,9 +1273,8 @@ class Tracker:
         safety, after = self.store.restore(entry["backup"])
         if entry.get("config_backup") and entry.get("config_file"):   # add_column also mapped a field
             source = self.backup_dir / entry["config_backup"]
-            if source.exists():
-                Path(entry["config_file"]).write_bytes(source.read_bytes())
-                self._use(load_config_file(Path(entry["config_file"])))
+            Path(entry["config_file"]).write_bytes(source.read_bytes())
+            self._use(load_config_file(Path(entry["config_file"])))
         self._audit({"tool": "undo_last_write", "undid": entry["at"], "undid_backup": entry.get("backup"),
                      "row": entry["row"],
                      "changes": [], "backup": safety,
@@ -1318,7 +1320,12 @@ class Tracker:
                          "backup": e.backup, "version_before": before, "version_after": None,
                          "unverified": str(e)})
             raise
-        extra = after_save() if after_save else {}   # e.g. the config line of a new column
+        try:
+            extra = after_save() if after_save else {}   # e.g. the config line of a new column
+        except OSError as e:   # the tracker is saved but its config is not: put the tracker back
+            self.store.restore(backup)
+            raise TrackerError(f"Could not write the config ({e.strerror or e}); the tracker was put back as it "
+                               "was, nothing changed. Make the config writable and retry.") from e
         self._audit({"tool": tool, "row": row, "changes": result["changes"], "labels": result["labels"],
                      "layout": layout_notes, "backup": backup,
                      "version_before": before, "version_after": after, **extra})

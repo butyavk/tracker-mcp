@@ -44,7 +44,7 @@ def test_a_date_with_more_text_is_reported_but_never_rewritten(tmp_path):
     plan = t.fix_tracker(dry_run=True)
     assert {(c["row"], c["field"]) for c in plan["changes"]} == {(3, "applied_on")}
     # the preview shows what the cell held, as text, and the date it becomes
-    assert "applied_on: «2026-09-12» (text) → 2026-09-12 (a date)" in server.describe_plan("fix_tracker", plan)
+    assert "applied_on: «2026-09-12» (text) → «2026-09-12» (a date)" in server.describe_plan("fix_tracker", plan)
     t.fix_tracker()
     ws = openpyxl.load_workbook(t.path)["Applications"]
     assert ws["H2"].value == "2026-09-10 via referral from Ann" and ws["H3"].value == datetime(2026, 9, 12)
@@ -256,7 +256,7 @@ def test_edit_corrects_dates_and_says_why_in_the_notes(tmp_path):
     plan = t.edit_application(2, {"applied_on": "2026-09-01", "replied_on": "2026-09-02"},
                               "from the e-mails", dry_run=True)
     text = server.describe_plan("edit_application", plan)
-    assert "applied_on: 2026-08 → 2026-09-01" in text and "replied_on: ∅ → 2026-09-02" in text
+    assert "applied_on: «2026-08» → «2026-09-01»" in text and "replied_on: ∅ → «2026-09-02" in text
     t.edit_application(2, {"applied_on": "2026-09-01", "replied_on": "2026-09-02"}, "from the e-mails")
     ws = openpyxl.load_workbook(t.path)["Applications"]
     assert ws["H2"].value == datetime(2026, 9, 1) and ws["O2"].value == datetime(2026, 9, 2)

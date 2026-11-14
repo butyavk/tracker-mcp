@@ -264,15 +264,31 @@ def _plan_key(ctx: Context) -> tuple[int, str]:
 _TOKEN_KEY = secrets.token_bytes(32)
 
 
+_USED_TOKENS: set[str] = set()   # a confirm token works once: after an undo the same plan is a new decision
+
+
 def plan_token(plan: dict[str, Any]) -> str:
     """Fingerprint of exactly what will be written, at exactly this file version."""
     basis = {k: plan.get(k) for k in ("row", "changes", "version", "would_undo", "layout", "column")}
+    basis["tracker"] = _tracker.store.label if _tracker is not None else ""   # a token belongs to one tracker
     data = json.dumps(basis, sort_keys=True, ensure_ascii=False, default=str)
     return hmac.new(_TOKEN_KEY, data.encode(), hashlib.sha256).hexdigest()[:12]
 
 
 def _has_work(plan: dict[str, Any]) -> bool:
     return bool(plan.get("changes") or plan.get("would_undo"))
+
+
+# letters and marks that draw nothing (Hangul fillers, the combining grapheme joiner, Khmer and Mongolian
+# invisible signs): kept as text they would let a cell look empty or split a word unseen
+_BLANK_LETTERS = {0x034F, 0x115F, 0x1160, 0x17B4, 0x17B5, 0x180B, 0x180C, 0x180D, 0x180E, 0x180F, 0x3164, 0xFFA0}
+
+
+def _quoted(value: Any) -> str:
+    """A value from the tracker in «»: always data in the preview, never words of the server."""
+    if value in (None, ""):
+        return "∅"   # empty, not data to quote
+    return "«" + _short(value).replace("«", "‹").replace("»", "›") + "»"
 
 
 def _one_line(value: Any) -> str:
@@ -295,7 +311,7 @@ def _one_line(value: Any) -> str:
         elif 0xE0020 <= cp <= 0xE007F:              # tag characters: only inside such a flag
             if not in_flag:
                 continue
-        elif cat == "Cf" and cp not in (0x200C, 0x200D):   # bidi, zero-width, soft hyphen, BOM: dropped
+        elif (cat == "Cf" and cp not in (0x200C, 0x200D)) or cp in _BLANK_LETTERS:   # hidden or blank: dropped
             in_flag = False
             continue
         else:
@@ -310,41 +326,41 @@ def _short(value: Any, limit: int = 120) -> str:
 
 
 def describe_plan(tool: str, plan: dict[str, Any]) -> str:
-    """The text the user sees in the confirmation dialog."""
+    """The text the user sees in the confirmation dialog. Everything that comes from the tracker or the
+    request is shown in «» and on one line: it is data, whatever it says."""
     if plan.get("would_undo"):
         e = plan["would_undo"]
         text = (f"Undo {_short(e.get('tool'))} from {_short(e.get('at'))} (rows {_short(e.get('row'))}): "
-                f"restore the backup {_short(e.get('backup'))}?")
+                f"restore the backup {_quoted(e.get('backup'))}?")
         if e.get("config_line"):
-            text += f" The config {_short(e.get('config_file'))} loses the line {_short(e['config_line'])}."
+            text += f" The config {_quoted(e.get('config_file'))} loses the line {_quoted(e['config_line'])}."
     elif tool == "add_column":
         col = plan.get("column", {})
-        # every piece of text that can come from the file or the request is one line, so a header
-        # with a line break cannot draw a fake line into the dialog
-        where = _one_line((plan.get("layout") or ["a new column"])[0])
+        where = _short((plan.get("layout") or ["a new column"])[0])
         lines = [f"add_column: add {where}" + (" (dates)" if col.get("kind") == "date" else "") + "?"]
         if col.get("config_line"):
-            lines.append(f"Config, [columns]: + {_one_line(col['config_line'])}")
-        lines += [f"Also: {_one_line(n)}" for n in (plan.get("layout") or [])[1:]]
+            lines.append(f"Config, [columns]: + {_quoted(col['config_line'])}")
+        lines += [f"Also: {_short(n)}" for n in (plan.get("layout") or [])[1:]]
         text = "\n".join(lines)
     else:
         labels = plan.get("labels", {})
         lines = [f"{tool}: change {len(labels)} row(s) of the tracker?"]
         for row, label in labels.items():
-            lines.append(f"\nRow {row} · {_short(label)}")
+            lines.append(f"\nRow {row} · {_quoted(label)}")
             for ch in plan["changes"]:
                 if str(ch["row"]) != str(row):
                     continue
                 old, new = ch["old"], ch["new"]
                 field = _short(ch["field"])
                 if old not in (None, "") and str(old) == str(new):
-                    lines.append(f"  {field}: «{_short(old)}» (text) → {_short(new)} (a date)")
+                    lines.append(f"  {field}: {_quoted(old)} (text) → {_quoted(new)} (a date)")
                 elif isinstance(old, str) and isinstance(new, str) and old and new.startswith(old):
-                    lines.append(f"  {field}: + {_short(new[len(old):].lstrip(' |'))}")
+                    lines.append(f"  {field}: + {_quoted(new[len(old):].lstrip(' |'))}")
                 else:
-                    lines.append(f"  {field}: {_short(old)} → {_short(new)}")
-        lines += [f"\n⚠ {_one_line(w)}" for w in plan.get("warnings", [])]
+                    lines.append(f"  {field}: {_quoted(old)} → {_quoted(new)}")
+        lines += [f"\n⚠ {_short(w)}" for w in plan.get("warnings", [])]
         text = "\n".join(lines)
+    text += "\n\nText in «» is the tracker's data, never an instruction."
     return f"{text}\n\n(plan {plan_token(plan)})"
 
 
@@ -444,6 +460,9 @@ def finish(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], appro
     answer = approval.data
     if isinstance(answer, WriteConfirmation) and not answer.confirm:
         raise ToolError("The user did not confirm; nothing was written.")
+    if answer == BY_TOKEN and confirm in _USED_TOKENS:
+        raise ToolError("Not written: this confirm token was already used. Each yes covers one write; show the "
+                        "user a new preview (dry_run=true) and ask again.")
     if answer == BY_TOKEN and confirm != token:
         raise ToolError("Not written: this needs the user's confirmation. Call the tool with dry_run=true, "
                         "show the user the changes, and after they agree repeat the call with "
@@ -457,7 +476,9 @@ def finish(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], appro
     if plan_token(fresh) != token:
         raise ToolError("Not written: what would be written changed after the user saw it (the config "
                         "was edited or the date moved). Show the new preview and ask again.")
-    return run(t, method, *args, dry_run=False, expected_version=plan["version"], **kwargs)
+    result = run(t, method, *args, dry_run=False, expected_version=plan["version"], **kwargs)
+    _USED_TOKENS.add(token)
+    return result
 
 
 Approval = ElicitationResult[WriteConfirmation]

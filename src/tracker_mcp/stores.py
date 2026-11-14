@@ -263,6 +263,44 @@ class _FileStore:
         return dst
 
 
+# Parts of an .xlsx that openpyxl writes back (or that Excel rebuilds by itself). Anything else in a
+# workbook is dropped by a save, so its presence refuses writes: allow, do not block.
+_KEPT_PARTS = ("[Content_Types].xml", "_rels/", "docProps/", "xl/workbook.xml", "xl/_rels/", "xl/styles.xml",
+               "xl/sharedStrings.xml", "xl/theme/", "xl/worksheets/", "xl/comments", "xl/drawings/", "xl/charts/",
+               "xl/media/", "xl/tables/", "xl/externalLinks/", "xl/pivotTables/", "xl/pivotCache/",
+               "xl/calcChain.xml", "xl/printerSettings/", "customXml/")
+_PART_NAMES = {"xl/threadedComments/": "threaded comments (Excel 365)", "xl/persons/": "threaded comments (Excel 365)",
+               "xl/featurePropertyBag/": "checkboxes in cells", "xl/richData/": "pictures or data types in cells",
+               "xl/metadata.xml": "dynamic-array formulas", "xl/slicers/": "slicers", "xl/slicerCaches/": "slicers",
+               "xl/timelines/": "timelines", "xl/ctrlProps/": "form controls", "xl/activeX/": "ActiveX controls",
+               "xl/embeddings/": "embedded objects", "xl/vbaProject.bin": "macros",
+               "xl/connections.xml": "data connections",
+               "xl/queryTables/": "query tables", "xl/webextensions/": "add-ins"}
+
+
+def _parts_a_save_drops(z: zipfile.ZipFile, names: list[str]) -> list[str]:
+    """What an openpyxl save would silently lose from this workbook, in words for the user."""
+    out = []
+    for n in names:
+        if not n.startswith(_KEPT_PARTS):
+            what = next((v for k, v in _PART_NAMES.items() if n.startswith(k)), f"the part {n}")
+            if what not in out:
+                out.append(what)
+    def text(n: str) -> str:
+        try:
+            return z.read(n).decode("utf-8", "replace")
+        except KeyError:
+            return ""
+    if any(re.search(r"<xdr:(?:sp|grpSp|cxnSp)\b", text(n)) for n in names if n.startswith("xl/drawings/drawing")):
+        out.append("shapes (text boxes, arrows, grouped drawings)")
+    if "xfComplement" in text("xl/styles.xml"):
+        out.append("checkboxes in cells")
+    if re.search(r"<(?:\w+:)?r>", text("xl/sharedStrings.xml")) or any(
+            re.search(r"<is>\s*<(?:\w+:)?r>", text(n)) for n in names if n.startswith("xl/worksheets/sheet")):
+        out.append("mixed formatting inside a cell (part bold, part plain)")
+    return [f"{w} (a save would drop them)" for w in dict.fromkeys(out)]
+
+
 class XlsxStore(_FileStore):
     kind = "xlsx"
 
@@ -283,9 +321,11 @@ class XlsxStore(_FileStore):
         lossy = sorted({str(w.message) for w in caught if "will be removed" in str(w.message)})
         # pictures need Pillow to survive an openpyxl save; without it they vanish on the first write
         try:
-            names = zipfile.ZipFile(BytesIO(data)).namelist()
+            z = zipfile.ZipFile(BytesIO(data))
+            names = z.namelist()
         except zipfile.BadZipFile:
-            names = []
+            z, names = None, []
+        lossy += _parts_a_save_drops(z, names) if z is not None else []
         if any(n.startswith("xl/media/") for n in names):
             try:
                 import PIL  # noqa: F401

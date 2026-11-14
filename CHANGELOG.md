@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.5 — 2026-11-14
+
+Fixed (a fourth review)
+- A write is refused, before anything changes, when saving would silently drop part of the workbook: threaded comments (Excel 365), checkboxes in cells, shapes and text boxes, dynamic-array formulas, cell pictures and data types, slicers, timelines, form controls, embedded objects, data connections, add-ins, or mixed formatting inside a cell. The list is of what a save keeps; anything else in the file blocks writes and is named.
+- A confirm token works once. After an undo, the same change is a new decision: the old token is refused and a new preview is needed. A token also belongs to one tracker.
+- add_column with a mapped field: if the config cannot be written, the tracker is put back as it was and the error says so, instead of a column without an audit line that then blocked undo.
+- Undo of such a column is refused, before anything is restored, when its config backup is gone.
+- Previews show every value from the tracker in «» with a line saying that text in «» is data, never an instruction; long names and warnings are cut to one short line; letters that draw nothing (Hangul fillers, the combining grapheme joiner) are dropped.
+- Tests now guard fixes that had none: network names never resolved, a symlink loop in the audit, keyed tokens, pictures without Pillow, the CSV guard for tab and CR, and cells kept inside the follow-up prompt's data.
+
 ## 0.8.4 — 2026-11-14
 
 Fixed (a sweep for the kinds of error the fifth review found, and an independent check of it)
