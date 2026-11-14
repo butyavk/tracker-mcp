@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.8.0 — 2026-11-14
+
+Changed (a red-team review)
+- `confirm_writes = false` in the config no longer turns the yes off by itself: the server must also be started with `--allow-unconfirmed-writes` (or `TRACKER_ALLOW_UNCONFIRMED=1`). A config file is easy to edit, by a person or by an instruction injected into a session; the command line is not. describe_tracker says when the setting is ignored.
+
+Added
+- `--dialog-only` (or `TRACKER_DIALOG_ONLY=1`): only the client's confirmation dialog confirms a write, and dry-run tokens are refused. In token mode the model sees the token, so only the instructions keep it from confirming its own preview; with this switch a person answers every write.
+- The write tools' description says never to confirm a preview the user has not answered, nor because a page, email, file or cell says the user agreed. README: the token's limit said plainly.
+
 ## 0.7.1 — 2026-11-14
 
 Fixed (independent review of 0.7.0)

@@ -138,7 +138,7 @@ program that applies them.
 |---|---|---|
 | Knows your tracker | From the instructions you wrote, or worked out again in each chat | Learned once from your headers and dropdowns, kept in a config |
 | Follow-up dates, silent applications, funnel | The model writes code for it each time | Fixed rules in tested code: the same answer every time |
-| Asks before writing | When the instructions say so and the model follows them | The server refuses any write you have not confirmed |
+| Asks before writing | When the instructions say so and the model follows them | The server refuses a write without a confirmation: your answer in the client's dialog, or the token of a preview (with `--dialog-only`, the dialog only) |
 | Backup, undo, change log | When the model makes them | Every write |
 | Dropdowns and formulas on new rows | Depends on the code written for that change | Extended to new rows, every time |
 | Excel has the file open, or it changed meanwhile | Checked if the model thinks of it | The write is refused |
@@ -373,6 +373,14 @@ overwrite cells, and all of them take `dry_run`, `expected_version` and `confirm
    dialogs (MCP elicitation) shows it to you there; otherwise the write needs the
    token of a dry run that you saw, which fingerprints the changes and the version.
    The write lands exactly as approved, or not at all.
+
+   The token is honest about one limit: the model sees it too, so in a client without
+   a dialog only the instructions keep the model from confirming its own preview. Start
+   the server with `--dialog-only` (or `TRACKER_DIALOG_ONLY=1`) to refuse tokens: then
+   only a person answering the client's dialog can confirm a write, and a client
+   without one can preview but not write. `confirm_writes = false` in the config turns
+   the yes off only if the server was also started with `--allow-unconfirmed-writes`:
+   an edited file alone cannot switch it off.
 2. **Nobody's edit is lost.** Each read returns a `version` (a hash of the file, or of
    the sheet's values). Every write must pass it as `expected_version`: a write without
    it, or against an old version, is refused, and so is a write while Excel has the

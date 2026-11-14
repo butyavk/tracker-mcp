@@ -262,3 +262,39 @@ def test_read_only_writes_no_calendar_file_and_no_config(t, monkeypatch, tmp_pat
 def test_read_only_env_values(monkeypatch, value, on):
     monkeypatch.setenv("TRACKER_READ_ONLY", value)
     assert server._read_only_env() is on
+
+
+def test_dialog_only_refuses_the_token(t, monkeypatch):
+    monkeypatch.setattr(server, "DIALOG_ONLY", True)
+
+    async def go():
+        async with Client(server.mcp) as c:
+            args = {"row": 7, "status": "Скрининг"}
+            preview = (await c.call_tool("set_status", {**args, "dry_run": True})).structured_content
+            res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "confirm": preview["confirm"],
+                                                   "expected_version": preview["version"]})
+            assert res.is_error and "dialog" in res.content[0].text
+            assert status_of(t, 7) == "Подана"
+            d = (await c.call_tool("describe_tracker", {})).structured_content
+            assert "dialog" in d["confirmation"]
+
+    anyio.run(go)
+
+
+def test_confirm_writes_false_in_the_file_needs_the_flag(t, monkeypatch):
+    """An edited config cannot turn the yes off by itself."""
+    cfg = t.cfg.model_copy(update={"safety": t.cfg.safety.model_copy(update={"confirm_writes": False})})
+    monkeypatch.setattr(t, "cfg", cfg)
+    monkeypatch.setattr(server, "ALLOW_UNCONFIRMED", False)
+
+    async def go():
+        async with Client(server.mcp) as c:
+            res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "expected_version": t.version()})
+            assert res.is_error and status_of(t, 7) == "Подана"
+            d = (await c.call_tool("describe_tracker", {})).structured_content
+            assert "ignored" in d["confirmation"]
+            monkeypatch.setattr(server, "ALLOW_UNCONFIRMED", True)
+            res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "expected_version": t.version()})
+            assert not res.is_error and status_of(t, 7) == "Скрининг"
+
+    anyio.run(go)
