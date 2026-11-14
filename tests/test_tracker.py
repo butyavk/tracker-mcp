@@ -262,3 +262,32 @@ def test_undo_after_a_new_write_reverts_the_new_one_first(t):
     assert t.version() == v0
     with pytest.raises(TrackerError, match="Nothing left"):
         t.undo_last_write()
+
+
+def test_a_damaged_audit_line_is_skipped_and_does_not_swallow_the_next(t):
+    t.log_followup(7, "FU-1 sent")
+    log = t.backup_dir / "audit.jsonl"
+    with open(log, "a", encoding="utf-8") as f:
+        f.write('{"at": "2026-10-18T10:00:00", "tool": "set_st')   # cut off, no newline
+    rw = t.recent_writes()
+    assert "unreadable_log_lines" in rw and rw["version"] == t.version()
+    t.set_status(7, "Скрининг")
+    assert [w["tool"] for w in t.recent_writes()["writes"]][:2] == ["set_status", "log_followup"]
+    t.undo_last_write()
+    assert t.get_application(row=7)["applications"][0]["status"] == "Подана"
+
+
+def test_undo_with_a_stale_version_says_re_read(t):
+    t.log_followup(7, "FU-1 sent")
+    with pytest.raises(ConflictError, match="Re-read and retry"):
+        t.undo_last_write(expected_version="deadbeef")
+
+
+def test_undo_preview_checks_the_backup_is_there(t):
+    t.log_followup(7, "FU-1 sent")
+    t.set_status(7, "Скрининг")
+    t.undo_last_write()
+    first = t.recent_writes()["writes"][-1]
+    (t.backup_dir / first["backup"]).unlink()
+    with pytest.raises(TrackerError, match="is gone"):
+        t.undo_last_write(dry_run=True)

@@ -20,7 +20,9 @@ not by letter, so inserting a column in Excel does not break the server.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import os
 import re
 import shutil
 from collections import Counter
@@ -726,7 +728,15 @@ class Tracker:
 
     def recent_writes(self, limit: int = 10) -> dict[str, Any]:
         entries = self._audit_entries()
-        return {"writes": entries[-limit:][::-1]}
+        out: dict[str, Any] = {"writes": entries[-limit:][::-1]}
+        try:   # the log is read even when the tracker itself cannot be
+            out["version"] = self.version()
+        except TrackerError:
+            pass
+        if getattr(self, "_audit_skipped", 0):
+            out["unreadable_log_lines"] = (f"{self._audit_skipped} line(s) of {self.backup_dir / 'audit.jsonl'} "
+                                           "could not be read and were skipped; those writes cannot be undone.")
+        return out
 
     # ---- writing: the tools
 
@@ -1201,7 +1211,8 @@ class Tracker:
             shutil.copy2(self.config_file, backup)
             self.config_file.write_text(new_text, encoding="utf-8")
             self._use(parse_config(new_text, str(self.config_file)))
-            return {"config_file": str(self.config_file), "config_backup": backup.name, "config_line": config_line}
+            return {"config_file": str(self.config_file), "config_backup": backup.name, "config_line": config_line,
+                    "config_after": hashlib.sha256(new_text.encode("utf-8")).hexdigest()}
 
         result = self._write("add_column", mutate, expected_version, dry_run, after_save=write_config)
         result["column"] = {"header": header, "kind": kind, **({"field": field, "config_line": config_line}
@@ -1222,6 +1233,9 @@ class Tracker:
             raise TrackerError("That write could not be checked after it was sent, so undo cannot tell "
                                f"what to restore safely. The old values are in {entry['backup']}.")
         current = self.version()
+        if expected_version and expected_version != current:
+            raise ConflictError(f"The tracker changed since you read it (now {current}, "
+                                f"you had {expected_version}). Re-read and retry.")
         in_place = current == entry["version_after"]
         if not in_place and entries and entries[-1]["tool"] == "undo_last_write" \
                 and entries[-1].get("version_after") == current:
@@ -1230,9 +1244,17 @@ class Tracker:
             later = next((e for e in reversed(entries)
                           if e["tool"] != "undo_last_write" and undid(entries[-1], e)), None)
             in_place = later is not None and later.get("version_before") == entry["version_after"]
-        if not in_place or (expected_version and expected_version != current):
+        if not in_place:
             raise ConflictError("The tracker changed after that write; undo would lose those changes. "
                                 f"Restore by hand from {entry['backup']} if needed.")
+        if not (self.backup_dir / entry["backup"]).exists():
+            raise TrackerError(f"Backup {entry['backup']} of that write is gone; nothing to restore.")
+        cfg_file = entry.get("config_file")
+        if entry.get("config_after") and cfg_file:
+            now = Path(cfg_file).read_bytes() if Path(cfg_file).exists() else b""
+            if hashlib.sha256(now).hexdigest() != entry["config_after"]:
+                raise ConflictError(f"The config {cfg_file} was edited after that column was added; undo would "
+                                    f"lose those edits. Remove the column and its config line by hand.")
         if dry_run:
             return {"dry_run": True, "would_undo": entry, "version": current}
         safety, after = self.store.restore(entry["backup"])
@@ -1310,14 +1332,33 @@ class Tracker:
     def _audit(self, entry: dict[str, Any]) -> None:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         entry = {"at": datetime.now().isoformat(timespec="seconds"), **entry}
-        with open(self.backup_dir / "audit.jsonl", "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+        log = self.backup_dir / "audit.jsonl"
+        lead = ""
+        if log.exists() and log.stat().st_size:
+            with open(log, "rb") as f:   # a cut-off last line must not swallow this one
+                f.seek(-1, os.SEEK_END)
+                lead = "" if f.read(1) == b"\n" else "\n"
+        with open(log, "a", encoding="utf-8") as f:
+            f.write(lead + json.dumps(entry, ensure_ascii=False, default=str) + "\n")
 
     def _audit_entries(self) -> list[dict[str, Any]]:
         log = self.backup_dir / "audit.jsonl"
         if not log.exists():
             return []
-        return [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines() if line.strip()]
+        entries, self._audit_skipped = [], 0
+        for line in log.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                continue
+            try:
+                e = json.loads(line)
+            except ValueError:   # a cut-off or hand-damaged line: skip it, count it
+                self._audit_skipped += 1
+                continue
+            if isinstance(e, dict) and "tool" in e:
+                entries.append(e)
+            else:
+                self._audit_skipped += 1
+        return entries
 
     # ---- writing: helpers
 

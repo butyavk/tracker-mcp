@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.1 — 2026-11-14
+
+Fixed (independent review of 0.7.0)
+- The confirmation token of add_column now covers the field, kind, dropdown and layout: a preview of a plain column no longer confirms a mapped column with a dropdown.
+- Undo of add_column stops if the config was edited by hand after it; before, a chained undo overwrote those edits.
+- A cut-off line in audit.jsonl no longer breaks recent_writes and undo, and no longer swallows the next write's line; recent_writes says how many lines it skipped and returns `version`.
+- Undo with a stale expected_version says "re-read and retry"; the undo preview checks that the write's backup is still there.
+- Read-only writes no files at all: the .ics export is refused, and the server does not write a config on first start.
+- TRACKER_READ_ONLY: any value but empty, 0, false, no or off turns it on. `tracker-mcp remote --read-only` works.
+- README: a scheduled run gets its own server list with only the read-only entry (`--strict-mcp-config`), and what the desktop app can and cannot do; the old "undo goes back one step only" line, the extension's description and the Russian page now describe stepping back.
+
 ## 0.7.0 — 2026-11-14
 
 Added

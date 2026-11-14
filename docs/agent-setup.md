@@ -123,5 +123,8 @@ in a protected folder (use the extension, or move the tracker).
 
 Do not use one tracker through two connected clients in the same chat (for example the
 local extension and a remote connector in Claude Desktop): the tools have the same
-names and the model may call the wrong one. Do not keep an Excel file and its copy in
+names and the model may call the wrong one. A read-only entry (`--read-only`) is meant
+for scheduled runs only: give the scheduled run its own server list with just that
+entry (README, «Scheduled tasks: a read-only entry»), not a second entry next to the
+read-write one in everyday chats. Do not keep an Excel file and its copy in
 Google Sheets as two trackers: pick one.

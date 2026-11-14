@@ -3,9 +3,9 @@
   "manifest_version": "0.4",
   "name": "tracker-mcp",
   "display_name": "Job-application tracker",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Ask Claude about your job-application tracker in Excel or CSV, and let it record what happened, with your confirmation.",
-  "long_description": "Point it at the spreadsheet where you keep your job applications. Claude can then answer \"which follow-ups are due this week?\", \"what's the status with Acme?\" or \"which channel gets me the most replies?\", and record what happened: \"I applied to Globex via LinkedIn\", \"Initech rejected me\".\n\nOn first start the server reads your headers and writes a small config next to the file (`<name>.tracker-mcp.toml`); Claude tells you what to check in it. Every write is shown to you first and needs your yes. The server makes a backup before each write, refuses to write while Excel has the file open, and can undo its last write.\n\nThis extension takes an .xlsx or .csv file. For a tracker in Google Sheets, set the server up as the README describes (a one-time Google sign-in from the command line).",
+  "long_description": "Point it at the spreadsheet where you keep your job applications. Claude can then answer \"which follow-ups are due this week?\", \"what's the status with Acme?\" or \"which channel gets me the most replies?\", and record what happened: \"I applied to Globex via LinkedIn\", \"Initech rejected me\".\n\nOn first start the server reads your headers and writes a small config next to the file (`<name>.tracker-mcp.toml`); Claude tells you what to check in it. Every write is shown to you first and needs your yes. The server makes a backup before each write, refuses to write while Excel has the file open, and can undo its writes one at a time, newest first.\n\nThis extension takes an .xlsx or .csv file. For a tracker in Google Sheets, set the server up as the README describes (a one-time Google sign-in from the command line).",
   "author": {
     "name": "Ivan Rykov",
     "url": "https://github.com/butyavk"
@@ -62,7 +62,7 @@
     {"name": "fix_tracker", "description": "Fix the issues check_tracker found, in one write (asks you first)"},
     {"name": "calendar_events", "description": "The open follow-ups as calendar events, for your own calendar tool"},
     {"name": "export_followups_calendar", "description": "Write the open follow-ups as an .ics file for your calendar"},
-    {"name": "undo_last_write", "description": "Undo the server's last write (asks you first)"}
+    {"name": "undo_last_write", "description": "Undo the newest write; again for earlier ones (asks you first)"}
   ],
   "prompts_generated": true,
   "keywords": ["job search", "job tracker", "applications", "excel", "csv", "google sheets", "follow-ups"],

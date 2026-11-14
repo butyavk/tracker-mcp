@@ -232,8 +232,33 @@ def test_read_only_from_the_command_line(monkeypatch, tmp_path):
     monkeypatch.setattr(server, "READ_ONLY", False)
     monkeypatch.setattr(server.mcp, "run", lambda *a, **k: None)
     monkeypatch.delenv("TRACKER_CONFIG", raising=False)
-    monkeypatch.delenv("TRACKER_READ_ONLY", raising=False)
+    monkeypatch.setenv("TRACKER_READ_ONLY", "")   # recorded, so main()'s "1" is undone after the test
     server._tracker, server._watch = None, None
     server.main(["--tracker", str(path), "--read-only"])
     assert server.READ_ONLY is True
     monkeypatch.setattr(server, "READ_ONLY", False)
+
+
+def test_read_only_writes_no_calendar_file_and_no_config(t, monkeypatch, tmp_path):
+    monkeypatch.setattr(server, "READ_ONLY", True)
+
+    async def go():
+        async with Client(server.mcp) as c:
+            res = await c.call_tool("export_followups_calendar", {})
+            assert res.is_error and "read-only" in res.content[0].text
+
+    anyio.run(go)
+    book = tmp_path / "plain.csv"
+    book.write_text("Company,Role,Status\nAcme,EM,Applied\n", encoding="utf-8")
+    monkeypatch.setenv("TRACKER_PATH", str(book))
+    monkeypatch.delenv("TRACKER_CONFIG", raising=False)
+    with pytest.raises(server.ConfigError, match="read-only server does not write"):
+        server.make_tracker()
+    assert not list(tmp_path.glob("*.toml"))
+
+
+@pytest.mark.parametrize("value,on", [("1", True), ("on", True), ("TRUE", True), ("", False),
+                                      ("0", False), ("off", False), ("no", False)])
+def test_read_only_env_values(monkeypatch, value, on):
+    monkeypatch.setenv("TRACKER_READ_ONLY", value)
+    assert server._read_only_env() is on

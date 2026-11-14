@@ -93,7 +93,8 @@ WRITE_NOTE = ("The tool writes only with the user's yes. The client may ask in i
               "agree in a new message repeat the same call with confirm=<token>. expected_version is "
               "required, and the write is refused if the tracker changed since. A server started with "
               "--read-only makes dry runs only.")
-UNDO_NOTE = "A backup is taken first, and undo_last_write reverts the write (again for earlier ones)."
+UNDO_NOTE = ("A backup is taken first, and undo_last_write reverts this write; called again, it steps "
+             "back through earlier writes, newest first.")
 
 
 def tool(title: str, annotations: ToolAnnotations):
@@ -163,6 +164,9 @@ def make_tracker(first_run: bool = True) -> Tracker:
     path, explicit = os.environ["TRACKER_PATH"], os.environ.get("TRACKER_CONFIG")
     cfg_file = config_path(path, explicit)
     if first_run and not explicit and not cfg_file.exists():
+        if READ_ONLY:
+            raise ConfigError(f"There is no config for {path} yet, and a read-only server does not write "
+                              f"one. Run `tracker-mcp init {path}` (or start the regular entry once) first.")
         _generated = _first_run(path, cfg_file)
     stamp = _stamp(cfg_file)   # taken before reading: an edit during the read is seen next time
     t = Tracker(path, config=load_config(path, explicit), backup_dir=os.environ.get("TRACKER_BACKUP_DIR"),
@@ -246,7 +250,7 @@ def _plan_key(ctx: Context) -> tuple[int, str]:
 
 def plan_token(plan: dict[str, Any]) -> str:
     """Fingerprint of exactly what will be written, at exactly this file version."""
-    basis = {k: plan.get(k) for k in ("row", "changes", "version", "would_undo")}
+    basis = {k: plan.get(k) for k in ("row", "changes", "version", "would_undo", "layout", "column")}
     data = json.dumps(basis, sort_keys=True, ensure_ascii=False, default=str)
     return hashlib.sha256(data.encode()).hexdigest()[:12]
 
@@ -295,7 +299,13 @@ def describe_plan(tool: str, plan: dict[str, Any]) -> str:
     return f"{text}\n\n(plan {plan_token(plan)})"
 
 
-READ_ONLY = os.environ.get("TRACKER_READ_ONLY", "").strip().lower() in ("1", "true", "yes")
+def _read_only_env() -> bool:
+    """TRACKER_READ_ONLY: any value but empty, 0, false, no or off turns read-only on, so a
+    spelling the server does not know errs on the safe side."""
+    return os.environ.get("TRACKER_READ_ONLY", "").strip().lower() not in ("", "0", "false", "no", "off")
+
+
+READ_ONLY = _read_only_env()
 
 
 def ask(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], *,
@@ -879,6 +889,9 @@ def export_followups_calendar(
     if _resolver is not None:
         raise ToolError("This server runs in the cloud and keeps no files for you: use calendar_events with "
                         "your calendar tool (the sync_calendar prompt) instead.")
+    if READ_ONLY:
+        raise ToolError("Not written: this server runs read-only and writes no files. calendar_events gives "
+                        "the same events for a calendar tool; the .ics file is made in a regular session.")
     return call("export_calendar", None, days)
 
 
@@ -894,8 +907,9 @@ def undo_last_write(
     dry_run: DryRun = False,
     confirm: Confirm = None,
 ) -> dict[str, Any]:
-    """Restore the file to its state before this server's last write. Refused if the
-    file has changed since that write (it would lose someone else's edits)."""
+    """Revert the newest write that is not undone yet; called again, step back through
+    earlier writes one at a time, newest first. Refused if the file (or, for add_column,
+    the config) changed since that write by any other way: it would lose those edits."""
     return finish(ctx, "undo_last_write", (), {}, approval, dry_run=dry_run, confirm=confirm)
 
 

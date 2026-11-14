@@ -412,8 +412,15 @@ def main(argv: list[str] | None = None) -> int:
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--port", type=int, default=int(os.environ.get("PORT", "8080")))
     p.add_argument("--host", default="0.0.0.0")
+    p.add_argument("--read-only", action="store_true",
+                   help="dry runs and previews only, every write refused (or TRACKER_READ_ONLY=1)")
     a = p.parse_args(argv)
     import uvicorn
+
+    if a.read_only:
+        from .. import server
+        os.environ["TRACKER_READ_ONLY"] = "1"
+        server.READ_ONLY = True
 
     _, app = build(Settings.from_env())
     print(f"tracker-mcp remote on {a.host}:{a.port}", file=sys.stderr)

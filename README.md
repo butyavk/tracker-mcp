@@ -384,8 +384,10 @@ overwrite cells, and all of them take `dry_run`, `expected_version` and `confirm
    that is not undone yet; call it again to step further back, one write at a time,
    as long as nobody edited the tracker in between.
 5. **Read-only for unattended runs**: `--read-only` (or `TRACKER_READ_ONLY=1`) keeps dry
-   runs and previews and refuses every write, even with a token. A scheduled task has
-   nobody to say yes, so give it a second, read-only entry of the server (below).
+   runs and previews and refuses every write, even with a token (the .ics export too, and
+   it never writes a config on first start). A scheduled task has nobody to say yes, so
+   give it a read-only entry of the server and keep the read-write one out of its reach
+   (below).
 6. **Your data is data**: text never turns into a formula, and the model is told not
    to follow instructions found in cells (a pasted job post). See [SECURITY.md](SECURITY.md).
 
@@ -396,12 +398,34 @@ header text, not by letter, so you can reorder them. When a row is added to an
 ### Scheduled tasks: a read-only entry
 
 A morning check that runs on a schedule should see the tracker and prepare changes,
-not write them. Register the server a second time, read-only, and let scheduled
-prompts use that one:
+not write them. The read-only entry only helps if the run cannot reach the read-write
+one, so give the scheduled run a server list of its own.
+
+**Claude Code (cron, launchd, `claude -p`)**: a file with only the read-only entry,
+for example `tracker-ro.mcp.json`:
+
+```json
+{"mcpServers": {"tracker-ro": {"command": "uvx",
+  "args": ["tracker-mcp==0.7.1", "--read-only"],
+  "env": {"TRACKER_PATH": "/Users/you/Documents/job-tracker.xlsx"}}}}
+```
+
+and run with only that list loaded:
 
 ```
-claude mcp add tracker-ro -e TRACKER_PATH="$HOME/Documents/job-tracker.xlsx" -- uvx tracker-mcp --read-only
+claude -p "$(cat morning.md)" --strict-mcp-config --mcp-config tracker-ro.mcp.json --allowedTools "mcp__tracker-ro"
 ```
+
+`--strict-mcp-config` drops every other MCP server for that run, so the read-write
+`tracker` is not there to call. Use full paths in cron (`~/.local/bin/uvx`,
+`~/.local/bin/claude`); on macOS, cron cannot read Documents, Desktop or Downloads
+without Full Disk Access, so prefer launchd or a tracker elsewhere.
+
+**Claude desktop app scheduled tasks**: every connected server is visible to every
+chat, a scheduled one included, and the extension has no read-only switch. There the
+safeguards are the app's own confirmation for write tools (do not set them to "always
+allow") and the task's prompt ("dry runs only"). If that is not enough for you, run
+the morning check from Claude Code as above.
 
 Its writes stop at the preview; you confirm them later in a session with the
 read-write entry.
@@ -482,7 +506,7 @@ bracket or dash ("Ashby (direct form)" → "Ashby"), or by substrings you list i
   Numbers files need saving as .xlsx first.
 - `init` understands English and Russian headers and status words. In other
   languages it maps less and lists the rest under "check by hand".
-- Undo goes back one step only. For a Google Sheet it restores values, not formatting.
+- Undo steps back one write at a time and stops at a hand edit (of the tracker, or of the config for add_column). For a Google Sheet it restores values, not formatting.
 - Without a dialog, the token proves that a preview was made and nothing drifted
   since. It cannot prove the model showed you that preview.
 - The remote server keeps its data as files and runs as one instance; it is meant for

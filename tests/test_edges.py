@@ -14,7 +14,7 @@ from tracker_mcp.doctor import reply_dates_from_audit
 from tracker_mcp.insights import followup_events, to_ics
 from tracker_mcp.mail import _domain_company, _msg_date, classify
 from tracker_mcp.scaffold import new_tracker
-from tracker_mcp.tracker import Tracker, TrackerError
+from tracker_mcp.tracker import ConflictError, Tracker, TrackerError
 
 from .test_insights import TODAY, build
 
@@ -482,3 +482,34 @@ def test_calendar_events_carry_an_id_line_for_the_clients_calendar_tool(tmp_path
     anyio.run(go)
     ics = to_ics(followup_events(server._tracker)[0])
     assert "tracker-mcp id: " in ics.replace("\r\n ", "")
+
+
+def test_add_column_token_covers_field_and_dropdown(tmp_path, monkeypatch):
+    """A token from a plain-column preview must not write a mapped column with a dropdown."""
+    path, _ = new_tracker(tmp_path / "jobs.xlsx")
+    monkeypatch.setenv("TRACKER_PATH", str(path))
+    monkeypatch.delenv("TRACKER_CONFIG", raising=False)
+    server._tracker, server._watch = None, None
+
+    async def go():
+        async with Client(server.mcp) as c:
+            preview = (await c.call_tool("add_column", {"header": "Source X", "dry_run": True})).structured_content
+            res = await c.call_tool("add_column", {"header": "Source X", "field": "source_x", "options": ["a", "b"],
+                                                   "confirm": preview["confirm"],
+                                                   "expected_version": preview["version"]})
+            assert res.is_error
+
+    anyio.run(go)
+    server._tracker, server._watch = None, None
+
+
+def test_undo_of_add_column_stops_at_a_hand_edit_of_the_config(tmp_path):
+    path, _ = new_tracker(tmp_path / "jobs.xlsx")
+    from tracker_mcp.config import config_path
+    cfg_file = config_path(path)
+    t = Tracker(path, config=load_config(path), today=lambda: TODAY, config_file=cfg_file)
+    t.add_column("Recruiter", field="recruiter")
+    cfg_file.write_text(cfg_file.read_text(encoding="utf-8") + "\n# my note\n", encoding="utf-8")
+    with pytest.raises(ConflictError, match="config .* was edited"):
+        t.undo_last_write(dry_run=True)
+    assert "# my note" in cfg_file.read_text(encoding="utf-8")
