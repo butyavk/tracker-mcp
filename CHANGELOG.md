@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.8.1 — 2026-11-14
+
+Fixed (a second red-team review)
+- `--dialog-only` wins over `--allow-unconfirmed-writes` with `confirm_writes = false`: no write lands without the dialog.
+- `TRACKER_ALLOW_UNCONFIRMED`, the one switch that loosens safety, reads only an explicit yes (1, true, yes, on); «never» or «none» leave it off.
+- A cell's newlines and control characters are shown as ⏎ in the confirmation dialog, so a cell cannot draw fake lines into it.
+- The draft_followup prompt escapes `<` in the tracker's data, so a cell cannot close its `<application>` tag.
+- `tracker-mcp remote --dialog-only`. The desktop extension has «Read-only» and «Confirm only in the app's dialog» settings.
+- README: dialog-only trusts the client to say it has a dialog.
+
 ## 0.8.0 — 2026-11-14
 
 Changed (a red-team review)

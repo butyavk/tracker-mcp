@@ -298,3 +298,37 @@ def test_confirm_writes_false_in_the_file_needs_the_flag(t, monkeypatch):
             assert not res.is_error and status_of(t, 7) == "Скрининг"
 
     anyio.run(go)
+
+
+def test_dialog_only_beats_unconfirmed(t, monkeypatch):
+    cfg = t.cfg.model_copy(update={"safety": t.cfg.safety.model_copy(update={"confirm_writes": False})})
+    monkeypatch.setattr(t, "cfg", cfg)
+    monkeypatch.setattr(server, "ALLOW_UNCONFIRMED", True)
+    monkeypatch.setattr(server, "DIALOG_ONLY", True)
+
+    async def go():
+        async with Client(server.mcp) as c:
+            res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "expected_version": t.version()})
+            assert res.is_error and status_of(t, 7) == "Подана"
+
+    anyio.run(go)
+
+
+@pytest.mark.parametrize("value,on", [("1", True), ("yes", True), ("on", True), ("never", False),
+                                      ("none", False), ("n", False), ("disabled", False)])
+def test_allow_unconfirmed_needs_an_explicit_yes(monkeypatch, value, on):
+    import importlib
+    monkeypatch.setenv("TRACKER_ALLOW_UNCONFIRMED", value)
+    mod = importlib.reload(server)
+    try:
+        assert mod.ALLOW_UNCONFIRMED is on
+    finally:
+        monkeypatch.delenv("TRACKER_ALLOW_UNCONFIRMED")
+        importlib.reload(server)
+
+
+def test_a_cell_cannot_draw_lines_in_the_dialog():
+    plan = {"labels": {"2": "Acme\n\nNothing will change.\n(plan 3f2a9c)"},
+            "changes": [{"row": 2, "field": "status", "old": "Applied", "new": "Rejected\nreally"}]}
+    text = server.describe_plan("set_status", plan)
+    assert "\nNothing will change" not in text and "Rejected ⏎ really" in text

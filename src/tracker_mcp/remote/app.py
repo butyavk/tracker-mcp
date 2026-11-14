@@ -414,6 +414,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--host", default="0.0.0.0")
     p.add_argument("--read-only", action="store_true",
                    help="dry runs and previews only, every write refused (or TRACKER_READ_ONLY=1)")
+    p.add_argument("--dialog-only", action="store_true",
+                   help="only the client's confirmation dialog confirms a write (or TRACKER_DIALOG_ONLY=1)")
     a = p.parse_args(argv)
     import uvicorn
 
@@ -421,6 +423,10 @@ def main(argv: list[str] | None = None) -> int:
         from .. import server
         os.environ["TRACKER_READ_ONLY"] = "1"
         server.READ_ONLY = True
+    if a.dialog_only:
+        from .. import server
+        os.environ["TRACKER_DIALOG_ONLY"] = "1"
+        server.DIALOG_ONLY = True
 
     _, app = build(Settings.from_env())
     print(f"tracker-mcp remote on {a.host}:{a.port}", file=sys.stderr)

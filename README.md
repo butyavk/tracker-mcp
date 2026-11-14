@@ -377,8 +377,9 @@ overwrite cells, and all of them take `dry_run`, `expected_version` and `confirm
    The token is honest about one limit: the model sees it too, so in a client without
    a dialog only the instructions keep the model from confirming its own preview. Start
    the server with `--dialog-only` (or `TRACKER_DIALOG_ONLY=1`) to refuse tokens: then
-   only a person answering the client's dialog can confirm a write, and a client
-   without one can preview but not write. `confirm_writes = false` in the config turns
+   only the client's own dialog can confirm a write, and a client without one can
+   preview but not write. The client says itself whether it has a dialog, so this
+   trusts the client (and any hook or harness that answers dialogs for you). `confirm_writes = false` in the config turns
    the yes off only if the server was also started with `--allow-unconfirmed-writes`:
    an edited file alone cannot switch it off.
 2. **Nobody's edit is lost.** Each read returns a `version` (a hash of the file, or of
@@ -430,7 +431,7 @@ claude -p "$(cat morning.md)" --strict-mcp-config --mcp-config tracker-ro.mcp.js
 without Full Disk Access, so prefer launchd or a tracker elsewhere.
 
 **Claude desktop app scheduled tasks**: every connected server is visible to every
-chat, a scheduled one included, and the extension has no read-only switch. There the
+chat, a scheduled one included. The extension's settings have «Read-only» and «Confirm only in the app's dialog»; read-only applies to every chat, so turn it on only while scheduled tasks are the only use. There the
 safeguards are the app's own confirmation for write tools (do not set them to "always
 allow") and the task's prompt ("dry runs only"). If that is not enough for you, run
 the morning check from Claude Code as above.
