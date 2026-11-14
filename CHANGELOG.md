@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.8.3 — 2026-11-14
+
+Fixed (a fifth review: a deep review and a red-team round)
+- Concurrent writes no longer lose rows: each write has a temp file of its own, and a lock (between threads of one server and between server processes) is held from the last version check to the replace; a second writer gets «the tracker changed, retry» instead of a raw FileNotFoundError.
+- Two trackers in one folder (`jobs.xlsx`, `jobs.2025.xlsx`) keep their own undo and backups: audit lines carry the tracker, and pruning matches exactly that tracker's backup names.
+- Undo cannot be turned into a write elsewhere by a forged audit line: it restores only this tracker's own backups by their bare names, and only this tracker's own config for add_column. Every field in the undo dialog is shown on one line, with the config file it touches.
+- The dialog cleaner also hides bidi and zero-width characters.
+- Confirm tokens are keyed by a secret of the server process, so a model cannot compute one without a dry run (preview again after a restart). A read-only server's previews carry no token; a dialog-capable client is told to call again without dry_run.
+- Excel Tables stretch to new rows; the template's own Summary formulas (`'Applications'!B2:B500`) grow past row 500.
+- Pictures in a workbook make writes refused while Pillow is missing (openpyxl would drop them on save).
+- `init` maps the shortest matching header («Status» over «Status note»); the generated config says where the statuses came from.
+- An interview invite saying «you have not selected a time» is no longer read as a rejection.
+- A layout error at startup prints `tracker-mcp: …` instead of a traceback. CSV text that starts with a tab or CR gets the formula guard too.
+- README: the read-only example pins `tracker-mcp>=0.8.3,<0.9`; client hooks that answer dialogs (Claude Code's Elicitation hooks) pass `--dialog-only` too, said plainly. A flaky sign-in test waits for its visitor thread.
+
 ## 0.8.2 — 2026-11-14
 
 Fixed

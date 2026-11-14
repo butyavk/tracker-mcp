@@ -587,7 +587,13 @@ class SheetsStore:
             raise
         return backup.name, after
 
+    def owns_backup(self, name: str) -> bool:
+        from .stores import backup_pattern
+        return bool(backup_pattern(self.id, ".json").fullmatch(name))
+
     def restore(self, backup: str) -> tuple[str, str]:
+        if not self.owns_backup(backup):   # a bare name of this sheet's backup, nothing else
+            raise TrackerError(f"«{backup}» is not a backup of this sheet; nothing restored.")
         path = self.backup_dir / backup
         if not path.exists():
             raise TrackerError(f"Backup {backup} is gone; nothing to restore.")

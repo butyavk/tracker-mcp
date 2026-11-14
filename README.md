@@ -415,7 +415,7 @@ for example `tracker-ro.mcp.json`:
 
 ```json
 {"mcpServers": {"tracker-ro": {"command": "uvx",
-  "args": ["tracker-mcp==0.7.1", "--read-only"],
+  "args": ["--from", "tracker-mcp>=0.8.3,<0.9", "tracker-mcp", "--read-only"],
   "env": {"TRACKER_PATH": "/Users/you/Documents/job-tracker.xlsx"}}}}
 ```
 
@@ -433,7 +433,10 @@ without Full Disk Access, so prefer launchd or a tracker elsewhere.
 **Claude desktop app scheduled tasks**: every connected server is visible to every
 chat, a scheduled one included. The extension's settings have «Read-only» and «Confirm only in the app's dialog»; read-only applies to every chat, so turn it on only while scheduled tasks are the only use. There the
 safeguards are the app's own confirmation for write tools (do not set them to "always
-allow") and the task's prompt ("dry runs only"). If that is not enough for you, run
+allow") and the task's prompt ("dry runs only"). A confirmation dialog proves only that the
+client answered it: a hook or a harness that answers dialogs for you (Claude Code's
+Elicitation hooks, in user, project or plugin settings) passes it too, `--dialog-only`
+included. Keep such hooks out of the folders and settings a scheduled run uses. If that is not enough for you, run
 the morning check from Claude Code as above.
 
 Its writes stop at the preview; you confirm them later in a session with the

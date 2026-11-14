@@ -1251,6 +1251,14 @@ class Tracker:
         if not (self.backup_dir / entry["backup"]).exists():
             raise TrackerError(f"Backup {entry['backup']} of that write is gone; nothing to restore.")
         cfg_file = entry.get("config_file")
+        cfg_backup = str(entry.get("config_backup") or "")
+        if cfg_file or cfg_backup:   # add_column: only this tracker's own config, from a backup in its folder
+            if self.config_file is None or Path(cfg_file or "").resolve() != Path(self.config_file).resolve() \
+                    or not cfg_backup or Path(cfg_backup).name != cfg_backup:
+                raise TrackerError("That write's audit line names another config file or a backup outside the "
+                                   f"backup folder; undo refuses it. Restore by hand from {entry['backup']}.")
+        if not self._owns(str(entry["backup"])):
+            raise TrackerError(f"«{entry['backup']}» is not a backup of this tracker; undo refuses it.")
         if entry.get("config_after") and cfg_file:
             now = Path(cfg_file).read_bytes() if Path(cfg_file).exists() else b""
             if hashlib.sha256(now).hexdigest() != entry["config_after"]:
@@ -1332,7 +1340,7 @@ class Tracker:
 
     def _audit(self, entry: dict[str, Any]) -> None:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
-        entry = {"at": datetime.now().isoformat(timespec="seconds"), **entry}
+        entry = {"at": datetime.now().isoformat(timespec="seconds"), "tracker": self.store.label, **entry}
         log = self.backup_dir / "audit.jsonl"
         lead = ""
         if log.exists() and log.stat().st_size:
@@ -1341,6 +1349,10 @@ class Tracker:
                 lead = "" if f.read(1) == b"\n" else "\n"
         with open(log, "a", encoding="utf-8") as f:
             f.write(lead + json.dumps(entry, ensure_ascii=False, default=str) + "\n")
+
+    def _owns(self, backup: str) -> bool:
+        owns = getattr(self.store, "owns_backup", None)
+        return bool(owns(backup)) if owns else True
 
     def _audit_entries(self) -> list[dict[str, Any]]:
         log = self.backup_dir / "audit.jsonl"
@@ -1356,7 +1368,11 @@ class Tracker:
                 self._audit_skipped += 1
                 continue
             if isinstance(e, dict) and "tool" in e:
-                entries.append(e)
+                # one backup folder can serve several trackers: only this tracker's lines count
+                # (older lines without «tracker» belong to it when their backup is one of its own)
+                if e.get("tracker", None) == self.store.label or (
+                        "tracker" not in e and self._owns(str(e.get("backup") or ""))):
+                    entries.append(e)
             else:
                 self._audit_skipped += 1
         return entries
@@ -1414,7 +1430,7 @@ class Tracker:
         """A CSV file has no cell types: Excel runs anything that looks like a formula
         when it opens one. Text the server writes there gets a leading apostrophe if
         it starts like a formula ("=", "+", "@", or "-" followed by more than a space)."""
-        if (self.store.kind == "csv" and isinstance(value, str) and value[:1] in ("=", "+", "@", "-")
+        if (self.store.kind == "csv" and isinstance(value, str) and value[:1] in ("=", "+", "@", "-", "\t", "\r")
                 and not (value[:1] == "-" and value[1:2] in ("", " "))):
             return "'" + value
         return value
@@ -1496,6 +1512,13 @@ class Tracker:
             if grown:
                 dv.sqref = MultiCellRange(" ".join(r.coord for r in ranges))
                 notes.append(f"dropdown {dv.sqref} now reaches row {new_row}")
+        for table in getattr(ws, "tables", {}).values() if self.store.kind == "xlsx" else []:
+            m = re.fullmatch(r"([A-Z]+)(\d+):([A-Z]+)(\d+)", table.ref or "")
+            if m and int(m.group(4)) < new_row:
+                table.ref = f"{m.group(1)}{m.group(2)}:{m.group(3)}{new_row}"
+                if table.autoFilter is not None:
+                    table.autoFilter.ref = table.ref
+                notes.append(f"table «{table.displayName}» now {table.ref}")
         if ws.auto_filter.ref:
             m = re.fullmatch(r"([A-Z]+)(\d+):([A-Z]+)(\d+)", ws.auto_filter.ref)
             if m and int(m.group(4)) < new_row:
@@ -1504,7 +1527,7 @@ class Tracker:
         summary = self.cfg.summary_sheet and sheet_in(wb, self.cfg.summary_sheet)
         if summary and summary in wb.sheetnames:
             sheet = self.cfg.sheet
-            ref = re.escape(sheet) if re.fullmatch(r"\w+", sheet) else re.escape(f"'{sheet}'")
+            ref = rf"'?{re.escape(sheet)}'?" if re.fullmatch(r"\w+", sheet) else re.escape(f"'{sheet}'")
             pattern = re.compile(rf"({ref}!\$?[A-Z]+\$?\d+:\$?[A-Z]+\$?)(\d+)")
             grown_cells = []
             for row in wb[summary].iter_rows():

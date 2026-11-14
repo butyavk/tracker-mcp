@@ -140,11 +140,14 @@ def _match_fields(headers: dict[int, str]) -> dict[str, tuple[int, str]]:
     out: dict[str, tuple[int, str]] = {}
     for name, pattern in FIELD_PATTERNS:
         rx = re.compile(pattern)
-        for col, text in headers.items():
-            if col not in taken and rx.search(_norm(text)):
-                out[name] = (col, text)
-                taken.add(col)
-                break
+        hits = [(col, text) for col, text in headers.items() if col not in taken and rx.search(_norm(text))]
+        if not hits:
+            continue
+        # «Status» beats «Status note», «Company» beats «Company website»: the shortest header that
+        # matches is the one the pattern names, a longer one only qualifies it
+        col, text = min(hits, key=lambda h: (len(_norm(h[1])), h[0]))
+        out[name] = (col, text)
+        taken.add(col)
     return out
 
 
@@ -406,7 +409,9 @@ def render(g: Guess, target: str = "<tracker>") -> str:
     if g.unmapped:
         lines += ["# Not mapped; returned under \"other\". Uncomment to give one a field name:"]
         lines += [f"# {_key(h, c)} = {_q(h)}" for c, h in g.unmapped]
-    lines += ["", f"[statuses]                      # statuses from the {g.statuses_from}"]
+    origin = {"dropdown": "status dropdown", "data": "values in the status column",
+              "none": "kit defaults: no dropdown or values found"}.get(g.statuses_from, g.statuses_from)
+    lines += ["", f"[statuses]                      # statuses from the {origin}"]
     lines += [
         f"not_applied = {_q(not_applied)}" + ("" if m["not_applied"] else "   # CHECK"),
         f"applied = {_q(applied)}" + ("" if m["applied"] else "   # CHECK"),

@@ -54,7 +54,8 @@ _NAME_SUFFIX = re.compile(r"\s*(?:talent|recruiting|recruitment|careers?|hiring|
 # starts "unfortunately we need to move your interview").
 _REJECT_STRONG = (r"not (be )?(moving|move) forward with (you|your)|decided (not )?to (move|proceed|go) (forward )?"
                   r"with other|with other candidates|not (be )?(progressing|proceeding) with|regret to inform"
-                  r"|will not be (moving|taking) (you|your)|position has been filled|not been selected|not selected"
+                  r"|will not be (moving|taking) (you|your)|position has been filled|not been selected"
+                  r"|(?:you were|you are|were|was) not selected"
                   r"|decided not to (move|proceed|progress)|unable to (offer|move forward)|вынуждены отказать"
                   r"|не готовы (продолжить|предложить)|решили не продолжать|отказ")
 _REJECT_WEAK = r"unfortunately|other candidates|no longer (considering|available)|к сожалению|не готовы"

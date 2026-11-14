@@ -146,6 +146,7 @@ def test_sign_in_ignores_strangers_and_keeps_the_token_private(tmp_path, monkeyp
     secret.write_text(json.dumps({"installed": {"client_id": "cid", "client_secret": "cs"}}), encoding="utf-8")
     seen = []
 
+    visitors = []
     def browser(url):
         q = dict(urllib.parse.parse_qsl(urllib.parse.urlparse(url).query))
         redirect, state = q["redirect_uri"], q["state"]
@@ -157,7 +158,9 @@ def test_sign_in_ignores_strangers_and_keeps_the_token_private(tmp_path, monkeyp
                     seen.append(200)
                 except urllib.error.HTTPError as e:
                     seen.append(e.code)
-        threading.Thread(target=visit, daemon=True).start()
+        visitor = threading.Thread(target=visit, daemon=True)
+        visitor.start()
+        visitors.append(visitor)
         return True
 
     exchanged = {}
@@ -171,6 +174,8 @@ def test_sign_in_ignores_strangers_and_keeps_the_token_private(tmp_path, monkeyp
     monkeypatch.setenv("NO_PROXY", "127.0.0.1")
     monkeypatch.setenv("no_proxy", "127.0.0.1")
     token, picked = gsheets.login(secret, token_file=tmp_path / "home" / "google-token.json")
+    for v in visitors:   # the visitor records the last answer after login() has returned
+        v.join(timeout=5)
     assert exchanged["code"] == "good" and seen == [404, 404, 200]
     assert json.loads(token.read_text(encoding="utf-8"))["refresh_token"] == "r"
     if sys.platform != "win32":

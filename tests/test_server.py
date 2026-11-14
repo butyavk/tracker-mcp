@@ -218,7 +218,9 @@ def test_read_only_mode_previews_but_never_writes(t, monkeypatch):
             preview = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "dry_run": True})
             assert not preview.is_error
             data = preview.structured_content
-            res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "confirm": data["confirm"],
+            assert "confirm" not in data and "read-only" in data["next"]   # no token to confirm with
+            token = server.plan_token(data)
+            res = await c.call_tool("set_status", {"row": 7, "status": "Скрининг", "confirm": token,
                                                    "expected_version": data["version"]})
             assert res.is_error and "read-only" in res.content[0].text
             assert status_of(t, 7) == "Подана"

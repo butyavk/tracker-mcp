@@ -21,9 +21,13 @@ import io
 import os
 import re
 import shutil
+import tempfile
+import threading
+import time
 import warnings
 import zipfile
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -111,6 +115,50 @@ def open_store(target: str | Path, backup_dir: str | Path | None = None) -> Stor
 
 # ---------------------------------------------------------------- files
 
+_THREAD_LOCKS: dict[str, threading.Lock] = {}
+_THREAD_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def file_lock(path: Path):
+    """One writer at a time for one tracker: a lock between threads of this server and an OS
+    lock between server processes, held from the last version check to the replace."""
+    key = str(path.resolve())
+    with _THREAD_LOCKS_GUARD:
+        tl = _THREAD_LOCKS.setdefault(key, threading.Lock())
+    with tl:
+        lock_file = path.with_name(f".{path.name}.tracker-mcp.lock")
+        with open(lock_file, "a+b") as fh:
+            if os.name == "nt":
+                import msvcrt
+                fh.seek(0)
+                for _ in range(100):   # about ten seconds
+                    try:
+                        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+                        break
+                    except OSError:
+                        time.sleep(0.1)
+                else:
+                    raise ConflictError("Another write to this tracker is still running; retry in a moment.")
+                try:
+                    yield
+                finally:
+                    fh.seek(0)
+                    msvcrt.locking(fh.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+                try:
+                    yield
+                finally:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
+
+
+def backup_pattern(stem: str, suffix: str) -> re.Pattern:
+    """The backups of exactly this tracker: «jobs.2025.xlsx» is not a backup of «jobs.xlsx»."""
+    return re.compile(re.escape(stem) + r"\.\d{8}-\d{6}-\d{6}" + re.escape(suffix) + r"$")
+
+
 class _FileStore:
     """What .xlsx and .csv share: a local file, lock files, backups next to it,
     and the write path temp file -> verify -> version check -> backup -> rename."""
@@ -145,7 +193,14 @@ class _FileStore:
         raise NotImplementedError
 
     def _tmp(self) -> Path:
-        return self.path.with_name(f".{self.path.stem}.tracker-mcp-tmp{self.path.suffix}")
+        # a temp file of its own per write: two writers never share one
+        fd, name = tempfile.mkstemp(dir=self.path.parent, prefix=f".{self.path.stem}.tracker-mcp-",
+                                    suffix=self.path.suffix)
+        os.close(fd)
+        return Path(name)
+
+    def owns_backup(self, name: str) -> bool:
+        return bool(backup_pattern(self.path.stem, self.path.suffix).fullmatch(name))
 
     def _replace(self, tmp: Path) -> None:
         try:
@@ -160,34 +215,41 @@ class _FileStore:
         try:
             tmp.write_bytes(self._render(wb))
             verify(self._parse(tmp.read_bytes()))
-            if self.version() != before:  # someone saved while we worked
-                raise ConflictError("The tracker changed while writing; nothing was saved. Retry.")
-            backup = self._backup()
-            shutil.copymode(self.path, tmp)
-            self._replace(tmp)
+            with file_lock(self.path):
+                if self.version() != before:  # someone saved while we worked
+                    raise ConflictError("The tracker changed while writing; nothing was saved. Retry.")
+                backup = self._backup()
+                shutil.copymode(self.path, tmp)
+                self._replace(tmp)
+                after = self.version()
         finally:
             tmp.unlink(missing_ok=True)
-        return backup.name, self.version()
+        return backup.name, after
 
     def restore(self, backup: str) -> tuple[str, str]:
         self.check_writable()
+        if not self.owns_backup(backup):   # a bare name of this tracker's backup, nothing else
+            raise TrackerError(f"«{backup}» is not a backup of {self.path.name}; nothing restored.")
         source = self.backup_dir / backup
         if not source.exists():
             raise TrackerError(f"Backup {backup} is gone; nothing to restore.")
-        safety = self._backup()
         tmp = self._tmp()
         try:
             shutil.copy2(source, tmp)
-            self._replace(tmp)
+            with file_lock(self.path):
+                safety = self._backup()
+                self._replace(tmp)
+                after = self.version()
         finally:
             tmp.unlink(missing_ok=True)
-        return safety.name, self.version()
+        return safety.name, after
 
     def _backup(self) -> Path:
         self.backup_dir.mkdir(parents=True, exist_ok=True)
         dst = backup_path(self.backup_dir, self.path.stem, self.path.suffix)
         shutil.copy2(self.path, dst)
-        old = sorted(self.backup_dir.glob(f"{self.path.stem}.*{self.path.suffix}"))
+        pat = backup_pattern(self.path.stem, self.path.suffix)
+        old = sorted(p for p in self.backup_dir.iterdir() if pat.fullmatch(p.name))
         for p in old[:-KEEP_BACKUPS]:
             p.unlink()
         return dst
@@ -211,6 +273,17 @@ class XlsxStore(_FileStore):
         # Parts of the file openpyxl cannot keep (e.g. dropdowns that newer Excel stores
         # in an extension): a save would silently drop them, so writes are refused.
         lossy = sorted({str(w.message) for w in caught if "will be removed" in str(w.message)})
+        # pictures need Pillow to survive an openpyxl save; without it they vanish on the first write
+        try:
+            names = zipfile.ZipFile(BytesIO(data)).namelist()
+        except zipfile.BadZipFile:
+            names = []
+        if any(n.startswith("xl/media/") for n in names):
+            try:
+                import PIL  # noqa: F401
+            except ImportError:
+                lossy.append("pictures in the workbook (they would be dropped on save; `pip install pillow` "
+                             "in the server's environment keeps them)")
         return wb, digest(data), lossy
 
     def _render(self, wb: Workbook) -> bytes:

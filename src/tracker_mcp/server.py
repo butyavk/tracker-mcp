@@ -20,10 +20,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import inspect
 import json
 import os
 import re
+import secrets
 import sys
 import time
 from collections import OrderedDict
@@ -257,21 +259,29 @@ def _plan_key(ctx: Context) -> tuple[int, str]:
     return session, str(ctx.request_id)
 
 
+# A token is keyed by a secret of this server process, so it cannot be computed from the plan
+# without a dry run; after a restart, preview again.
+_TOKEN_KEY = secrets.token_bytes(32)
+
+
 def plan_token(plan: dict[str, Any]) -> str:
     """Fingerprint of exactly what will be written, at exactly this file version."""
     basis = {k: plan.get(k) for k in ("row", "changes", "version", "would_undo", "layout", "column")}
     data = json.dumps(basis, sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha256(data.encode()).hexdigest()[:12]
+    return hmac.new(_TOKEN_KEY, data.encode(), hashlib.sha256).hexdigest()[:12]
 
 
 def _has_work(plan: dict[str, Any]) -> bool:
     return bool(plan.get("changes") or plan.get("would_undo"))
 
 
+_INVISIBLE = re.compile("[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]+")
+
+
 def _one_line(value: Any) -> str:
     """Cell text as one line: a newline or control character in a cell cannot draw fake lines
     into the confirmation dialog («Nothing will change…»)."""
-    return re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]+", " ⏎ ", str(value)).strip()
+    return _INVISIBLE.sub(" ⏎ ", str(value)).strip()
 
 
 def _short(value: Any, limit: int = 120) -> str:
@@ -283,9 +293,10 @@ def describe_plan(tool: str, plan: dict[str, Any]) -> str:
     """The text the user sees in the confirmation dialog."""
     if plan.get("would_undo"):
         e = plan["would_undo"]
-        text = f"Undo {e['tool']} from {e['at']} (rows {e['row']}): restore the backup {e['backup']}?"
+        text = (f"Undo {_short(e.get('tool'))} from {_short(e.get('at'))} (rows {_short(e.get('row'))}): "
+                f"restore the backup {_short(e.get('backup'))}?")
         if e.get("config_line"):
-            text += f" The config loses the line {e['config_line']}."
+            text += f" The config {_short(e.get('config_file'))} loses the line {_short(e['config_line'])}."
     elif tool == "add_column":
         col = plan.get("column", {})
         where = (plan.get("layout") or ["a new column"])[0]
@@ -382,9 +393,11 @@ _NEXT_REMOTE = ("Nothing is written yet. Show the user this preview and stop: en
                 "as the preview.")
 
 
-_NEXT_DIALOG = ("Nothing is written yet. Show the user this preview. This server confirms writes only in the "
-                "client's own dialog (--dialog-only): call the tool again without dry_run, and the client asks the "
-                "user; a confirm token is refused here.")
+_NEXT_READ_ONLY = ("Nothing is written: this server is read-only. List this change for the user; it is "
+                   "written in a live session with the read-write server, after their yes.")
+_NEXT_DIALOG = ("Nothing is written yet. Show the user this preview. The write is confirmed in the client's "
+                "own dialog: after the user wants it, call the tool again without dry_run, and the client asks "
+                "them.")
 
 
 def finish(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], approval: Any, *,
@@ -397,7 +410,11 @@ def finish(ctx: Context, method: str, args: tuple, kwargs: dict[str, Any], appro
         return plan
     token = plan_token(plan)
     if dry_run:
-        nxt = _NEXT_DIALOG if DIALOG_ONLY else (_NEXT_REMOTE if _resolver is not None else _NEXT)
+        if READ_ONLY:   # nothing can be confirmed here: no token, and say where it is written
+            return {**plan, "preview": describe_plan(method, plan), "next": _NEXT_READ_ONLY}
+        caps = ctx.client_capabilities
+        has_dialog = caps is not None and caps.elicitation is not None
+        nxt = (_NEXT_DIALOG if DIALOG_ONLY or has_dialog else (_NEXT_REMOTE if _resolver is not None else _NEXT))
         return {**plan, "confirm": token, "preview": describe_plan(method, plan), "next": nxt}
     if not isinstance(approval, AcceptedElicitation):
         raise ToolError("The user did not confirm; nothing was written.")
@@ -872,7 +889,8 @@ def _ask_stale(ctx: Context, days: int = 30, rows: list[int] | None = None,
 def close_stale(
     ctx: Context,
     approval: Annotated[Approval, Resolve(_ask_stale)],
-    days: Annotated[int, Field(ge=1, description="Submitted at least this many days ago")] = 30,
+    days: Annotated[int, Field(ge=1, description="Silent at least this many days (since the last touch, or "
+                                                  "since submitting: the config's silence_from)")] = 30,
     rows: Annotated[list[int] | None, Field(
         description="Only these rows (each must be stale); default: all from stale_applications")] = None,
     expected_version: Version = None,
@@ -941,7 +959,7 @@ def _ask_undo(ctx: Context, expected_version: str | None = None, dry_run: bool =
     return ask(ctx, "undo_last_write", (), {}, expected_version=expected_version, dry_run=dry_run)
 
 
-@tool("Undo the last write", EDIT)
+@tool("Undo writes, newest first", EDIT)
 def undo_last_write(
     ctx: Context,
     approval: Annotated[Approval, Resolve(_ask_undo)],
@@ -1145,7 +1163,7 @@ def main(argv: list[str] | None = None) -> None:
     try:  # fail at startup, with the reason in the client's log, not on the first call
         _tracker = make_tracker(first_run=not args.check)
         layout = _describe()
-    except (ConfigError, TrackerError) as e:
+    except (ConfigError, TrackerError, ToolError) as e:
         print(f"tracker-mcp: {e}", file=sys.stderr)
         sys.exit(2)
     if args.check:
