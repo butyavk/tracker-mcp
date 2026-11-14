@@ -1212,7 +1212,8 @@ class Tracker:
             self.config_file.write_text(new_text, encoding="utf-8")
             self._use(parse_config(new_text, str(self.config_file)))
             return {"config_file": str(self.config_file), "config_backup": backup.name, "config_line": config_line,
-                    "config_after": hashlib.sha256(new_text.encode("utf-8")).hexdigest()}
+                    # the bytes on disk (Windows writes \r\n), so undo compares like with like
+                    "config_after": hashlib.sha256(self.config_file.read_bytes()).hexdigest()}
 
         result = self._write("add_column", mutate, expected_version, dry_run, after_save=write_config)
         result["column"] = {"header": header, "kind": kind, **({"field": field, "config_line": config_line}
