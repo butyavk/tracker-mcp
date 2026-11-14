@@ -1227,7 +1227,8 @@ class Tracker:
                 and entries[-1].get("version_after") == current:
             # the previous undo restored the state before a later write; that state is the
             # one this write left behind, unless someone edited the file in between
-            later = next((e for e in reversed(entries) if e["tool"] != "undo_last_write" and undid(entries[-1], e)), None)
+            later = next((e for e in reversed(entries)
+                          if e["tool"] != "undo_last_write" and undid(entries[-1], e)), None)
             in_place = later is not None and later.get("version_before") == entry["version_after"]
         if not in_place or (expected_version and expected_version != current):
             raise ConflictError("The tracker changed after that write; undo would lose those changes. "

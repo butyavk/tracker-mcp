@@ -1053,7 +1053,8 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--backup-dir", help="where backups and audit.jsonl go (or TRACKER_BACKUP_DIR)")
     parser.add_argument("--check", action="store_true", help="print how the config maps the tracker, then exit")
     parser.add_argument("--read-only", action="store_true",
-                        help="dry runs and previews only, every write refused: for scheduled tasks (or TRACKER_READ_ONLY=1)")
+                        help="dry runs and previews only, every write refused: "
+                             "for scheduled tasks (or TRACKER_READ_ONLY=1)")
     parser.add_argument("--version", action="version", version=f"tracker-mcp {__version__}")
     args = parser.parse_args(argv)
     for opt, env in ((args.tracker, "TRACKER_PATH"), (args.config, "TRACKER_CONFIG"),
