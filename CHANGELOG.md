@@ -6,7 +6,10 @@ Fixed (a sweep for the kinds of error the fifth review found)
 - The same tracker reached by another path (relative, `~`, a link) keeps its undo history: audit lines name the resolved file, and older lines written under another spelling of the path still count.
 - Two servers that open the same file through different paths take the same lock (it sits next to the real file).
 - A store that cannot say whether a backup is its own owns none, so undo refuses rather than guesses.
-- Every piece of text in a confirmation dialog that can come from the file or the request — column names, config lines, field names, warnings — is shown on one line, not only the undo dialog's fields.
+- Every piece of text in a confirmation dialog that can come from the file or the request — column names, config lines, field names, warnings — is shown on one line, not only the undo dialog's fields. The cleaner works by Unicode category (controls, format characters such as bidi marks, zero-width characters, the soft hyphen and the BOM, line separators, private-use and unassigned characters), not by a list.
+- A write through a symlinked tracker replaces the real file and leaves the link a link; backups and the audit sit next to the real file, so every path to it shares one history (an existing backup folder next to a link is kept).
+- An odd audit line (such as `~nosuchuser/…`) no longer stops undo or recent_writes.
+- Every command line (`init`, `new`, `calendar`, `--check`) answers a file it cannot read or write with one line naming it, exit 2, never a traceback.
 
 ## 0.8.3 — 2026-11-14
 

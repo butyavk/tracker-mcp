@@ -170,8 +170,13 @@ class _FileStore:
     def __init__(self, path: str | Path, backup_dir: str | Path | None = None):
         self.path = Path(path).expanduser()
         self.label = str(self.path)
-        self.backup_dir = (Path(backup_dir).expanduser() if backup_dir
-                           else self.path.parent / "backups-tracker-mcp")
+        if backup_dir:
+            self.backup_dir = Path(backup_dir).expanduser()
+        else:   # next to the real file, so every path to it shares one history; an existing
+            # folder next to a link (made before 0.8.4) is kept, so its undo history stays
+            by_real = self.path.resolve().parent / "backups-tracker-mcp"
+            by_link = self.path.parent / "backups-tracker-mcp"
+            self.backup_dir = by_link if by_link.is_dir() and not by_real.is_dir() else by_real
 
     def _bytes(self) -> bytes:
         if not self.path.exists():
@@ -195,8 +200,9 @@ class _FileStore:
 
     def _tmp(self) -> Path:
         # a temp file of its own per write: two writers never share one
-        fd, name = tempfile.mkstemp(dir=self.path.parent, prefix=f".{self.path.stem}.tracker-mcp-",
-                                    suffix=self.path.suffix)
+        # next to the real file: a write through a link replaces the file, not the link
+        real = self.path.resolve()
+        fd, name = tempfile.mkstemp(dir=real.parent, prefix=f".{real.stem}.tracker-mcp-", suffix=real.suffix)
         os.close(fd)
         return Path(name)
 
@@ -205,7 +211,7 @@ class _FileStore:
 
     def _replace(self, tmp: Path) -> None:
         try:
-            os.replace(tmp, self.path)
+            os.replace(tmp, self.path.resolve())   # the real file: a link stays a link
         except OSError as e:  # Windows: OneDrive, an antivirus or Excel holding the file
             raise ConflictError(f"Could not replace {self.path.name}: {e.strerror or e}. Another program "
                                 "(Excel, OneDrive, an antivirus) may be holding it. Nothing was changed; "

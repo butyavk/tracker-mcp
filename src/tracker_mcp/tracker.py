@@ -1366,10 +1366,10 @@ class Tracker:
         if name == self.store.label or name == self._identity():
             return True
         if getattr(self.store, "path", None) is not None and not name.startswith("Google Sheet "):
-            try:
-                return str(Path(name).expanduser().resolve()) == self._identity()
-            except (OSError, ValueError):
-                return False
+            try:   # os.path.expanduser leaves «~nosuchuser» as it is; Path.expanduser would raise
+                return str(Path(os.path.expanduser(name)).resolve()) == self._identity()
+            except (OSError, ValueError, RuntimeError):
+                return False   # an odd audit line belongs to nobody; it never stops undo
         return False
 
     def _audit_entries(self) -> list[dict[str, Any]]:

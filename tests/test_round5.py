@@ -140,3 +140,55 @@ def test_dialog_text_from_headers_is_one_line():
     text += describe_plan("set_status", {"labels": {2: "Acme"}, "changes": [
         {"row": 2, "field": fake, "old": "a", "new": "b"}], "warnings": [fake]})
     assert "\nNothing will change" not in text
+
+
+def test_write_through_a_link_keeps_the_link_and_its_history(tmp_path):
+    t = fresh(tmp_path)
+    (tmp_path / "elsewhere").mkdir()
+    link = tmp_path / "elsewhere" / "linked.xlsx"
+    link.symlink_to(t.path)
+    via = Tracker(link, config=t.cfg, today=lambda: TODAY)
+    via.add_application("Acme", "EM", expected_version=via.version())
+    assert link.is_symlink()
+    real = Tracker(t.path, config=t.cfg, today=lambda: TODAY)
+    assert [r["company"] for r in real.list_applications()["applications"]] == ["Acme"]
+    assert real.recent_writes()["writes"]
+    assert not list((tmp_path / "elsewhere").glob(".*.lock"))   # the lock sits by the real file
+    assert (tmp_path / ".jobs.xlsx.tracker-mcp.lock").exists()
+
+
+def test_written_by_a_relative_path_seen_by_the_absolute_one(tmp_path, monkeypatch):
+    t = fresh(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    rel = Tracker("jobs.xlsx", config=t.cfg, today=lambda: TODAY)
+    rel.add_application("Acme", "EM", expected_version=rel.version())
+    monkeypatch.chdir("/")
+    assert Tracker(t.path, config=t.cfg, today=lambda: TODAY).recent_writes()["writes"]
+
+
+def test_an_odd_audit_line_does_not_break_undo(tmp_path):
+    t = fresh(tmp_path)
+    t.add_application("Acme", "EM", expected_version=t.version())
+    log = t.backup_dir / "audit.jsonl"
+    log.write_text(log.read_text(encoding="utf-8") + json.dumps(
+        {"tool": "x", "tracker": "~nosuchuser_xyz/jobs.xlsx", "backup": "b"}) + "\n", encoding="utf-8")
+    assert t.recent_writes()["writes"]
+    assert t.undo_last_write(dry_run=True)
+
+
+def test_dialog_hides_every_invisible_character():
+    from tracker_mcp.server import _one_line
+    for ch in "؜⁠﻿­᠎​‮\U000e0069 \x85":
+        assert ch not in _one_line(f"a{ch}b"), repr(ch)
+    assert _one_line("Café — «ok»") == "Café — «ok»"
+
+
+def test_cli_names_an_unreadable_file(tmp_path, capsys):
+    from tracker_mcp.server import main
+    bad = tmp_path / "c.toml"
+    bad.write_bytes(b"\xff\xfe")
+    path = fresh(tmp_path).path
+    with pytest.raises(SystemExit) as ex:
+        main(["calendar", "--tracker", str(path), "--config", str(bad)])
+    assert ex.value.code == 2
+    assert "cannot read" in capsys.readouterr().err

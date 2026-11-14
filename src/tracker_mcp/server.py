@@ -24,10 +24,10 @@ import hmac
 import inspect
 import json
 import os
-import re
 import secrets
 import sys
 import time
+import unicodedata
 from collections import OrderedDict
 from datetime import date
 from pathlib import Path
@@ -275,13 +275,21 @@ def _has_work(plan: dict[str, Any]) -> bool:
     return bool(plan.get("changes") or plan.get("would_undo"))
 
 
-_INVISIBLE = re.compile("[\x00-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]+")
-
-
 def _one_line(value: Any) -> str:
     """Cell text as one line: a newline or control character in a cell cannot draw fake lines
-    into the confirmation dialog («Nothing will change…»)."""
-    return _INVISIBLE.sub(" ⏎ ", str(value)).strip()
+    into the confirmation dialog («Nothing will change…»). By Unicode category, not a list: every
+    control (Cc), format (Cf: bidi, zero-width, soft hyphen, BOM), line and paragraph separator
+    (Zl, Zp), private-use or unassigned character is shown as ⏎."""
+    out, gap = [], False
+    for ch in str(value):
+        if unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp", "Co", "Cn", "Cs"):
+            if not gap:
+                out.append(" ⏎ ")
+            gap = True
+        else:
+            out.append(ch)
+            gap = False
+    return "".join(out).strip()
 
 
 def _short(value: Any, limit: int = 120) -> str:
@@ -1109,6 +1117,18 @@ def calendar_cli(argv: list[str]) -> int:
 
 
 def main(argv: list[str] | None = None) -> None:
+    """Every command: a file that cannot be read (not UTF-8, a folder, a missing path) gives one
+    line naming it and exit 2, never a traceback."""
+    try:
+        _main(argv)
+    except (UnicodeDecodeError, OSError) as e:
+        name = getattr(e, "filename", None)
+        what = f"{name}: " if name else ""
+        print(f"tracker-mcp: cannot read or write {what}{type(e).__name__}: {e}", file=sys.stderr)
+        sys.exit(2)
+
+
+def _main(argv: list[str] | None = None) -> None:
     argv = sys.argv[1:] if argv is None else argv
     for stream in (sys.stdout, sys.stderr):  # CLI output in any language, also on Windows consoles
         if hasattr(stream, "reconfigure"):
