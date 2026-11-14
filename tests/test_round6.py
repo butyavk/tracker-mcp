@@ -70,6 +70,7 @@ def test_mixed_formatting_in_a_cell_survives_a_write(tmp_path):
         part = next(n for n in z.namelist() if n.startswith("xl/worksheets/sheet") and "Acme" in z.read(n).decode())
         new = z.read(part).decode().replace(
             "<is><t>Acme</t></is>", "<is><r><rPr><b/></rPr><t>Ac</t></r><r><t>me</t></r></is>")
+    z.close()   # Windows: an open handle keeps the tracker from being replaced on save
     assert "<r>" in new
     with_parts(t.path, {}, {part: new})
     t = loaded(Tracker(t.path, config=t.cfg, today=lambda: TODAY))
@@ -79,9 +80,9 @@ def test_mixed_formatting_in_a_cell_survives_a_write(tmp_path):
     assert "Acme" in json.dumps(found, default=str)
     t.add_application("Globex", "EM", expected_version=t.version())
     t = loaded(Tracker(t.path, config=t.cfg, today=lambda: TODAY))
-    z = zipfile.ZipFile(t.path)
-    body = "".join(z.read(n).decode() for n in z.namelist()
-                   if n == "xl/sharedStrings.xml" or n.startswith("xl/worksheets/sheet"))
+    with zipfile.ZipFile(t.path) as z:
+        body = "".join(z.read(n).decode() for n in z.namelist()
+                       if n == "xl/sharedStrings.xml" or n.startswith("xl/worksheets/sheet"))
     assert re.search(r"<r><rPr><b\b[^>]*/></rPr><t>Ac</t></r>", body), "the bold run was lost on save"
 
 
