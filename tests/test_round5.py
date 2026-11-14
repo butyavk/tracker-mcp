@@ -192,3 +192,16 @@ def test_cli_names_an_unreadable_file(tmp_path, capsys):
         main(["calendar", "--tracker", str(path), "--config", str(bad)])
     assert ex.value.code == 2
     assert "cannot read" in capsys.readouterr().err
+
+
+def test_write_tools_are_the_ones_the_kit_lists():
+    """job-search-kit lists these in schedules/README.md as the tools a desktop task keeps on «ask»;
+    a tool that starts or stops writing changes that list too (the kit's TrackerContract test checks it)."""
+    import asyncio
+
+    from tracker_mcp.server import mcp
+    tools = asyncio.run(mcp.list_tools())
+    writes = {t.name for t in tools if not (t.annotations and t.annotations.read_only_hint)}
+    assert writes == {"add_application", "add_applications", "add_column", "close_stale", "edit_application",
+                      "export_followups_calendar", "fix_tracker", "log_followup", "mark_applied",
+                      "reschedule_followup", "set_status", "set_statuses", "undo_last_write"}
