@@ -34,7 +34,7 @@ needed, asks where your tracker is, connects it and checks the result:
 ```text
 Install tracker-mcp for me: an MCP server that lets AI keep my job-application spreadsheet.
 Read the instructions for agents and follow them:
-https://raw.githubusercontent.com/butyavk/tracker-mcp/v0.8.4/docs/agent-setup.md
+https://raw.githubusercontent.com/butyavk/tracker-mcp/v0.8.5/docs/agent-setup.md
 First ask me where my tracker is and which app to connect it to.
 Don't edit the tracker yourself, and check at the end that it works.
 ```
