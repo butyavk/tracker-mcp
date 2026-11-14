@@ -83,7 +83,9 @@ def live(tmp_path, monkeypatch):
 
     def exchange_code(client, code, verifier):
         assert verifier and client.redirect_uri.endswith("/google/callback")
-        return {"access_token": f"g-{code}", "refresh_token": f"gr-{code}", "expires_in": 3600,
+        # marked so a test can look for them: a random value on the page may hold «g-» by chance
+        return {"access_token": f"google-access-token-{code}", "refresh_token": f"google-refresh-token-{code}",
+                "expires_in": 3600,
                 "id_token": id_token(signing_in[code])}
 
     monkeypatch.setattr(google, "exchange_code", exchange_code)
@@ -192,7 +194,8 @@ def test_sign_in_pick_a_sheet_and_use_the_tools(live):
     client = live.register()
     page, (r, verifier) = live.sign_in(ALICE, client)
     assert "Test client" in page.text and "127.0.0.1:9" in page.text and "alice@example.com" in page.text
-    assert "consent/picker" in page.text and "g-" not in page.text   # no Google token in the page itself
+    assert "consent/picker" in page.text   # and no Google token in the page itself:
+    assert "google-access-token-" not in page.text and "google-refresh-token-" not in page.text
     tok = live.tokens(client, r, verifier)
     assert tok["token_type"].lower() == "bearer" and tok["refresh_token"]
 
@@ -216,7 +219,7 @@ def test_sign_in_pick_a_sheet_and_use_the_tools(live):
     assert backups, "the write left a backup in the user's own folder"
     # stored by hash only; the Google refresh token encrypted
     raw = "".join(p.read_text() for p in live.data.rglob("*.json"))
-    assert tok["access_token"] not in raw and tok["refresh_token"] not in raw and "gr-" not in raw
+    assert tok["access_token"] not in raw and tok["refresh_token"] not in raw and "google-refresh-token-" not in raw
 
 
 def test_refresh_rotates_and_revokes_the_old_pair(live):
