@@ -751,7 +751,7 @@ wheels = [
 
 [[package]]
 name = "tracker-mcp"
-version = "0.8.2"
+version = "0.8.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "mcp" },
@@ -759,21 +759,21 @@ dependencies = [
     { name = "pydantic" },
     { name = "pyjwt", extra = ["crypto"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/fb/c9/a47595decfa27e837a0bfb67887fda9effd968fb57c688a995f5d98ad64d/tracker_mcp-0.8.2.tar.gz", hash = "sha256:ad317049adbb17da63b4c781a2ffeed74c9909aba5a8a1ca0b86eab501c5d054", size = 174947, upload-time = "2026-11-14T09:19:06.933Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0d/8b/5af970a80c188d01f86f63883d36a65a38ce0aab11cee1ac537a98ff9a42/tracker_mcp-0.8.3.tar.gz", hash = "sha256:74665a092d6c14f6fb41ef44ce73b40e717e41af17d20b2b5d41c6336123270f", size = 179609, upload-time = "2026-11-14T10:07:34.932Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/bd/08/a8f23748e54c97266f766435ea11b77b71b6ed42878264601f58a76a8d37/tracker_mcp-0.8.2-py3-none-any.whl", hash = "sha256:ba3a3212cfc5ad834766a375c35720c469fe0d8868796f83cb6772118e4f6a50", size = 123524, upload-time = "2026-11-14T09:19:05.307Z" },
+    { url = "https://files.pythonhosted.org/packages/45/f6/50db8e2372f2ace83d78e588f33a0bed39b67683bd0479c592f857dfa90c/tracker_mcp-0.8.3-py3-none-any.whl", hash = "sha256:649d05f3d54a3719b6d555c9fd83a6179644d55cb23a56d4910adfc244e0ffe1", size = 125635, upload-time = "2026-11-14T10:07:33.387Z" },
 ]
 
 [[package]]
 name = "tracker-mcp-plugin"
-version = "0.8.2"
+version = "0.8.3"
 source = { virtual = "." }
 dependencies = [
     { name = "tracker-mcp" },
 ]
 
 [package.metadata]
-requires-dist = [{ name = "tracker-mcp", specifier = "==0.8.2" }]
+requires-dist = [{ name = "tracker-mcp", specifier = "==0.8.3" }]
 
 [[package]]
 name = "truststore"
